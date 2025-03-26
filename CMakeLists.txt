@@ -10,9 +10,9 @@ set(Boost_USE_STATIC_LIBS OFF)
 set(Boost_USE_MULTITHREADED ON)
 set(Boost_USE_STATIC_RUNTIME OFF)
 find_package(Boost 1.74 REQUIRED COMPONENTS system thread)
-find_package(GLEW REQUIRED)
-
-
+if (NOT APPLE)
+  find_package(GLEW REQUIRED)
+endif()
 
 option(USE_SYSTEM_FLTK "Use system-installed FLTK instead of downloading a standalone FLTK" OFF)
 
@@ -39,5 +39,11 @@ target_link_libraries(telefacet
     fltk::fltk
     fltk::images
     fltk::gl
-    GLEW::GLEW
+    Boost::thread
 )
+if (NOT APPLE)
+  target_link_libraries(telefacet
+    PRIVATE
+      GLEW::GLEW
+  )
+endif()
