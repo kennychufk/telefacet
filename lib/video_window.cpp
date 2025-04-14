@@ -203,8 +203,8 @@ void VideoWindow::init_app_gl(void) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R16, image_width_, image_height_, 0, GL_RED,
-               GL_UNSIGNED_SHORT, nullptr);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, image_width_, image_height_, 0, GL_RED,
+               GL_UNSIGNED_BYTE, nullptr);
   glGenerateMipmap(GL_TEXTURE_2D);
 
   glGenFramebuffers(1, &debayer_fbo_);
@@ -279,7 +279,7 @@ void VideoWindow::draw(void) {
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_list_[cursor_next]);
 
     int data_size = image_width_ * image_height_ *
-                    sizeof(GLushort);  // TODO: parameterize bit depth
+                    sizeof(GLubyte);  // TODO: parameterize bit depth
     // To avoid stalling:the previous data in PBO will be discarded and
     // glMapBuffer() returns a new allocated pointer immediately even if GPU
     // is still working with the previous data.
@@ -302,7 +302,7 @@ void VideoWindow::draw(void) {
     glBindTexture(GL_TEXTURE_2D, bayer_texture_);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_list_[pbo_cursor_]);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, image_width_, image_height_, GL_RED,
-                    GL_UNSIGNED_SHORT, 0);
+                    GL_UNSIGNED_BYTE, 0);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
     glBindFramebuffer(GL_FRAMEBUFFER, debayer_fbo_);
@@ -362,30 +362,7 @@ int VideoWindow::handle(int event) {
 }
 
 void VideoWindow::update_pbo(ResponseHeader const &header, uint8_t const *src) {
-  for (int row = 0; row < image_height_; ++row) {
-    memcpy(latest_frame_.data() + row * image_width_ * sizeof(uint16_t),
-           src + row * header.stride, image_width_ * sizeof(uint16_t));
-  }
-
-  // int i = 40;
-  // std::stringstream filename_stream;
-  // filename_stream << "/home/kennychufk/workspace/pythonWs/rpi-raw/"
-  //                    "color-test-0331/output/cam0-"
-  //                 << i << ".raw";
-  // std::string filename = filename_stream.str();
-  //
-  // constexpr int height = 1088;
-  // constexpr int width = 1456;
-  // constexpr int stride = 1472;
-  // constexpr int filesize = height * stride * sizeof(uint16_t);
-  // std::ifstream raw_file(filename, std::ios::binary | std::ios::in);
-  // std::array<uint16_t, height * stride> bayer_untrimmed;
-  // raw_file.read(reinterpret_cast<char *>(bayer_untrimmed.data()), filesize);
-  // std::array<uint16_t, height * width> bayer;
-  // for (int row = 0; row < height; ++row) {
-  //   memcpy(latest_frame_.data() + row * width * sizeof(uint16_t),
-  //          bayer_untrimmed.data() + row * stride, width * sizeof(uint16_t));
-  // }
+  memcpy(latest_frame_.data(), src, image_width_ * image_height_);
 }
 
 void VideoWindow::notify_image_dim(int width, int height) {
@@ -395,12 +372,11 @@ void VideoWindow::notify_image_dim(int width, int height) {
 }
 
 void VideoWindow::resize_image() {
-  latest_frame_.resize(image_width_ * image_height_ *
-                       sizeof(uint16_t));  // TODO: parameterize bit depth
+  latest_frame_.resize(image_width_ * image_height_);
 
   glBindTexture(GL_TEXTURE_2D, bayer_texture_);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R16, image_width_, image_height_, 0, GL_RED,
-               GL_UNSIGNED_SHORT, nullptr);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, image_width_, image_height_, 0, GL_RED,
+               GL_UNSIGNED_BYTE, nullptr);
 
   glBindTexture(GL_TEXTURE_2D, debayer_texture_);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, image_width_, image_height_, 0, GL_RGB,

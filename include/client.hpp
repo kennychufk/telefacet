@@ -7,14 +7,9 @@
 #include <iostream>
 #include <video_window.hpp>
 
-using boost::asio::ip::tcp;
+#include "request.hpp"
 
-enum class Command : uint32_t { configure, control, start, stop };
-struct Request {
-  Command command;
-  uint32_t key;
-  uint8_t value[32];
-};
+using boost::asio::ip::tcp;
 
 std::ostream& operator<<(std::ostream& out, const ResponseHeader& header);
 
@@ -52,6 +47,6 @@ class Client {
   std::vector<uint8_t> read_buffer_;
   ResponseHeader current_header_;
   unsigned int read_frame_buffer_cursor_;
-  // std::array<std::vector<uint8_t>, kNumReadFrameBuffers> failed
-  std::vector<std::vector<uint8_t>> read_frame_buffers_;
+  std::array<std::vector<uint8_t>, kNumReadFrameBuffers> read_frame_buffers_;
+  // std::vector<std::vector<uint8_t>> read_frame_buffers_;
 };

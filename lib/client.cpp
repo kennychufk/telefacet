@@ -14,7 +14,6 @@ std::ostream& operator<<(std::ostream& out, const ResponseHeader& header) {
              << "payload_size: " << header.payload_size << ", "
              << "width: " << header.width << ", " << "height: " << header.height
              << ", "
-             << "stride: " << header.stride << ", "
              << "frame_id: " << header.frame_id << "]";
 }
 
@@ -23,8 +22,8 @@ Client::Client(boost::asio::io_context& io_context, VideoWindow& video_win)
       socket_(io_context),
       video_win_(video_win),
       stopped_(false),
-      read_frame_buffers_(kNumReadFrameBuffers),
-      read_buffer_(kMaxReadLength) {}
+      read_buffer_(kMaxReadLength),
+      read_frame_buffer_cursor_(0) {}
 
 void Client::connect(std::string const& host, std::string const& service) {
   boost::asio::ip::tcp::resolver r(io_context_);
@@ -187,6 +186,10 @@ void Client::read_frame_header(uint32_t offset, uint32_t buffer_offset,
             handle_response(current_header_);
             read_frame_header(0, remainder, length - remainder);
           } else {
+            std::cout << "read_frame_buffer_cursor_ is "
+                      << read_frame_buffer_cursor_ << std::endl;
+            std::cout << "The size of read_frame_buffers_="
+                      << read_frame_buffers_.size() << std::endl;
             read_frame_buffers_[read_frame_buffer_cursor_].resize(
                 current_header_.payload_size);
             read_frame_content(0, remainder, length - remainder);
