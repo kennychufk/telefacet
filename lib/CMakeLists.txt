@@ -1,5 +1,7 @@
 list(APPEND lib_telefacet_SOURCES
   ${CMAKE_CURRENT_LIST_DIR}/shader.cpp
+  ${CMAKE_CURRENT_LIST_DIR}/client.cpp
+  ${CMAKE_CURRENT_LIST_DIR}/video_window.cpp
 )
 
 add_library(lib_telefacet ${lib_telefacet_SOURCES})
