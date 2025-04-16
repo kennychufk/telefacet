@@ -10,6 +10,10 @@
 int main(int argc, char **argv) {
   boost::asio::io_context io_context;
   auto work_guard = boost::asio::make_work_guard(io_context);
+  if (argc < 3) {
+    std::cout << "Usage: telefacet host port" << std::endl;
+    return 0;
+  }
 
   std::thread asio_thread([&io_context]() { io_context.run(); });
 
@@ -20,13 +24,13 @@ int main(int argc, char **argv) {
   grid->color(FL_WHITE);
   Fl_Button *button = new Fl_Button(0, 0, 100, 30, "connect");
   VideoWindow *video_win = new VideoWindow(0, 0, 300, 300);
-  Client client(io_context, *video_win);
+  Client client(io_context, *video_win, argv[1], argv[2]);
   button->callback(
       [](Fl_Widget *widget, void *data) {
         Client *client = reinterpret_cast<Client *>(data);
         std::cout << "button pressed" << std::endl;
         if (!client->is_socket_open()) {
-          client->connect("rpi5-dic0.local", "8080");
+          client->connect();
           widget->label("configure");
         } else if (strcmp(widget->label(), "configure") == 0) {
           std::cout << "configure" << std::endl;

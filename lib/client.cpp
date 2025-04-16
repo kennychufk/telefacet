@@ -17,21 +17,24 @@ std::ostream& operator<<(std::ostream& out, const ResponseHeader& header) {
              << "frame_id: " << header.frame_id << "]";
 }
 
-Client::Client(boost::asio::io_context& io_context, VideoWindow& video_win)
+Client::Client(boost::asio::io_context& io_context, VideoWindow& video_win,
+               const char* host, const char* port)
     : io_context_(io_context),
       socket_(io_context),
+      host_(host),
+      port_(port),
       video_win_(video_win),
       stopped_(false),
       read_buffer_(kMaxReadLength),
       read_frame_buffer_cursor_(0) {}
 
-void Client::connect(std::string const& host, std::string const& service) {
+void Client::connect() {
   boost::asio::ip::tcp::resolver r(io_context_);
 
   std::cout << "socket is open " << socket_.is_open() << std::endl;
   // not sure why async_resolve always fails
   boost::asio::ip::tcp::resolver::results_type endpoints =
-      r.resolve(host, service);
+      r.resolve(host_, port_);
   socket_.async_connect(
       endpoints.begin()->endpoint(),
       std::bind(&Client::handle_connect, this, std::placeholders::_1));

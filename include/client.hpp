@@ -17,8 +17,9 @@ class Client {
  public:
   static constexpr int kMaxReadLength = 32768;
   static constexpr int kNumReadFrameBuffers = 2;
-  Client(boost::asio::io_context& io_context, VideoWindow&);
-  void connect(std::string const& host, std::string const& service);
+  Client(boost::asio::io_context& io_context, VideoWindow&, const char* host,
+         const char* port);
+  void connect();
   void configure();
   void start();
   void stop();
@@ -40,6 +41,8 @@ class Client {
   unsigned int advance_cursor();
 
  private:
+  std::string host_;
+  std::string port_;
   boost::asio::io_context& io_context_;
   tcp::socket socket_;
   VideoWindow& video_win_;
