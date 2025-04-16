@@ -201,15 +201,12 @@ void Client::read_frame_header(uint32_t offset, uint32_t buffer_offset,
 }
 
 void Client::handle_response(ResponseHeader header) {
-  // TODO: expand to other cameras
-  if (header.camera_id == 0) {
-    if (header.header_type == HeaderType::ack) {
-      std::cout << "received ack header" << std::endl;
-      std::cout << header << std::endl;
-      video_win_.notify_image_dim(header.width, header.height);
-    } else if (header.header_type == HeaderType::bayer) {
-      handle_frame(header, advance_cursor());
-    }
+  if (header.header_type == HeaderType::ack) {
+    std::cout << "received ack header" << std::endl;
+    std::cout << header << std::endl;
+    video_win_.notify_image_dim(header.width, header.height);
+  } else if (header.header_type == HeaderType::bayer) {
+    handle_frame(header, advance_cursor());
   }
 }
 

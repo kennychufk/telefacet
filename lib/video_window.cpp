@@ -23,6 +23,11 @@ VideoWindow::VideoWindow(int x, int y, int w, int h)
   // TODO: need to get image info during configuration stage
   image_width_ = 30;
   image_height_ = 30;
+
+  latest_frame_.resize(kNumCameras);
+  for (int i = 0; i < kNumCameras; ++i) {
+    latest_frame_[i].resize(image_width_ * image_height_);
+  }
 }
 
 void VideoWindow::init_gl(void) {
@@ -194,35 +199,39 @@ void VideoWindow::init_app_gl(void) {
                         (void *)(12 * sizeof(float)));
   glEnableVertexAttribArray(1);
 
-  glGenTextures(1, &bayer_texture_);
-  glBindTexture(GL_TEXTURE_2D, bayer_texture_);
+  // Generate textures and framebuffers for both cameras
+  glGenTextures(kNumCameras, bayer_texture_);
+  glGenFramebuffers(kNumCameras, debayer_fbo_);
+  glGenTextures(kNumCameras, debayer_texture_);
 
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  // Set up textures and framebuffers for both cameras
+  for (int i = 0; i < kNumCameras; ++i) {
+    // Set up bayer texture
+    glBindTexture(GL_TEXTURE_2D, bayer_texture_[i]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, image_width_, image_height_, 0,
+                 GL_RED, GL_UNSIGNED_BYTE, nullptr);
+    glGenerateMipmap(GL_TEXTURE_2D);
 
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, image_width_, image_height_, 0, GL_RED,
-               GL_UNSIGNED_BYTE, nullptr);
-  glGenerateMipmap(GL_TEXTURE_2D);
-
-  glGenFramebuffers(1, &debayer_fbo_);
-  glBindFramebuffer(GL_FRAMEBUFFER, debayer_fbo_);
-  glGenTextures(1, &debayer_texture_);
-  glBindTexture(GL_TEXTURE_2D, debayer_texture_);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, image_width_, image_height_, 0, GL_RGB,
-               GL_UNSIGNED_BYTE, nullptr);
-  glGenerateMipmap(GL_TEXTURE_2D);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                         debayer_texture_, 0);
-  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-    std::cout << "ERROR::FRAMEBUFFER:: Framebuffer is not complete!"
-              << std::endl;
+    // Set up debayer framebuffer and texture
+    glBindFramebuffer(GL_FRAMEBUFFER, debayer_fbo_[i]);
+    glBindTexture(GL_TEXTURE_2D, debayer_texture_[i]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, image_width_, image_height_, 0,
+                 GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           debayer_texture_[i], 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+      std::cout << "ERROR::FRAMEBUFFER:: Framebuffer " << i
+                << " is not complete!" << std::endl;
+  }
 
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -245,96 +254,122 @@ void VideoWindow::init_app_gl(void) {
   screen_shader_->set_int("imageTexture", 0);
 }
 
+void VideoWindow::update_ndc_values() {
+  // For the two-column layout, we need different NDC values for each half
+  float w_ratio = static_cast<float>(image_width_) / (viewport_width_ / 2);
+  float h_ratio = static_cast<float>(image_height_) / viewport_height_;
+
+  float ndc_x_max = 1.0f;
+  float ndc_y_max = 1.0f;
+  if (h_ratio < w_ratio) {
+    ndc_y_max = h_ratio / w_ratio;
+  } else {
+    ndc_x_max = w_ratio / h_ratio;
+  }
+
+  GLfloat ndc[] = {-ndc_x_max, ndc_y_max,  -ndc_x_max, -ndc_y_max,
+                   ndc_x_max,  -ndc_y_max, -ndc_x_max, ndc_y_max,
+                   ndc_x_max,  -ndc_y_max, ndc_x_max,  ndc_y_max};
+
+  glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+  glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(ndc), ndc);
+}
+
 void VideoWindow::draw(void) {
   if (dirty_image_dim_) {
     resize_image();
   }
-  if (!valid() || dirty_image_dim_) {  // if screen changes (becoming invalid)
+
+  if (!valid() || dirty_image_dim_) {
     viewport_width_ = pixel_w();
     viewport_height_ = pixel_h();
     std::cout << "current Fl_Gl_Window size: " << viewport_width_ << ","
               << viewport_height_ << std::endl;
 
-    float w_ratio = static_cast<float>(image_width_) / viewport_width_;
-    float h_ratio = static_cast<float>(image_height_) / viewport_height_;
-
-    float ndc_x_max = 1.0f;
-    float ndc_y_max = 1.0f;
-    if (h_ratio < w_ratio) {
-      ndc_y_max = h_ratio / w_ratio;
-    } else {
-      ndc_x_max = w_ratio / h_ratio;
-    }
-
-    GLfloat ndc[] = {-ndc_x_max, ndc_y_max,  -ndc_x_max, -ndc_y_max,
-                     ndc_x_max,  -ndc_y_max, -ndc_x_max, ndc_y_max,
-                     ndc_x_max,  -ndc_y_max, ndc_x_max,  ndc_y_max};
-    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(ndc), ndc);
+    update_ndc_values();
   }
+
   dirty_image_dim_ = false;
 
+  // Process both camera frames
   if (debayer_shader_) {
-    int cursor_next = (pbo_cursor_ + 1) % kNumUnpackBuffers;
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_list_[cursor_next]);
-
-    int data_size = image_width_ * image_height_ *
-                    sizeof(GLubyte);  // TODO: parameterize bit depth
-    // To avoid stalling:the previous data in PBO will be discarded and
-    // glMapBuffer() returns a new allocated pointer immediately even if GPU
-    // is still working with the previous data.
-    // glBufferData(GL_PIXEL_UNPACK_BUFFER, data_size, 0, GL_STREAM_DRAW);
-    if (!latest_frame_.empty()) {
-      GLubyte *pbo_ptr = (GLubyte *)glMapBufferRange(
-          GL_PIXEL_UNPACK_BUFFER, 0, data_size,
-          GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
-      if (pbo_ptr != nullptr) {
-        memcpy(pbo_ptr, latest_frame_.data(), data_size);
-
-        glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
-      } else {
-        std::cout << "Failed to get pbo address" << std::endl;
-      }
+    for (int i = 0; i < kNumCameras; ++i) {
+      process_camera_frame(i);
     }
-
-    pbo_cursor_ = cursor_next;
-
-    glBindTexture(GL_TEXTURE_2D, bayer_texture_);
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_list_[pbo_cursor_]);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, image_width_, image_height_, GL_RED,
-                    GL_UNSIGNED_BYTE, 0);
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, debayer_fbo_);
-    glViewport(0, 0, image_width_, image_height_);
-    glClearColor(0.08f, 0.8f, 0.8f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, bayer_texture_);
-
-    debayer_shader_->use();
-    glBindVertexArray(debayer_vao_);
-    glDisable(GL_DEPTH_TEST);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
   }
 
+  // Render to screen
   if (screen_shader_) {
+    // Clear the entire screen
     glViewport(0, 0, viewport_width_, viewport_height_);
     glClearColor(0.98f, 0.98f, 0.2f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, debayer_texture_);
-
     screen_shader_->use();
     glBindVertexArray(vao_);
     glDisable(GL_DEPTH_TEST);
+
+    // Left half - first camera
+    glViewport(0, 0, viewport_width_ / 2, viewport_height_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, debayer_texture_[0]);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // Right half - second camera
+    glViewport(viewport_width_ / 2, 0, viewport_width_ / 2, viewport_height_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, debayer_texture_[1]);
     glDrawArrays(GL_TRIANGLES, 0, 6);
   }
+
   Fl_Gl_Window::draw();  // Draw FLTK child widgets.
 }
+
+void VideoWindow::process_camera_frame(int camera_index) {
+  int cursor_next = (pbo_cursor_ + 1) % kNumUnpackBuffers;
+  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_list_[cursor_next]);
+
+  int data_size = image_width_ * image_height_ * sizeof(GLubyte);
+
+  // Copy camera data to PBO
+  if (!latest_frame_[camera_index].empty()) {
+    GLubyte *pbo_ptr = (GLubyte *)glMapBufferRange(
+        GL_PIXEL_UNPACK_BUFFER, 0, data_size,
+        GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
+    if (pbo_ptr != nullptr) {
+      memcpy(pbo_ptr, latest_frame_[camera_index].data(), data_size);
+      glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
+    } else {
+      std::cout << "Failed to get pbo address for camera " << camera_index
+                << std::endl;
+    }
+  }
+
+  pbo_cursor_ = cursor_next;
+
+  // Update texture with PBO data
+  glBindTexture(GL_TEXTURE_2D, bayer_texture_[camera_index]);
+  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_list_[pbo_cursor_]);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, image_width_, image_height_, GL_RED,
+                  GL_UNSIGNED_BYTE, 0);
+  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+
+  // Debayer the frame
+  glBindFramebuffer(GL_FRAMEBUFFER, debayer_fbo_[camera_index]);
+  glViewport(0, 0, image_width_, image_height_);
+  glClearColor(0.08f, 0.8f, 0.8f, 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT);
+
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, bayer_texture_[camera_index]);
+
+  debayer_shader_->use();
+  glBindVertexArray(debayer_vao_);
+  glDisable(GL_DEPTH_TEST);
+  glDrawArrays(GL_TRIANGLES, 0, 6);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 int VideoWindow::handle(int event) {
   static int first = 1;
   if (first && event == FL_SHOW && shown()) {
@@ -362,7 +397,10 @@ int VideoWindow::handle(int event) {
 }
 
 void VideoWindow::update_pbo(ResponseHeader const &header, uint8_t const *src) {
-  memcpy(latest_frame_.data(), src, image_width_ * image_height_);
+  if (header.camera_id >= 0 && header.camera_id < kNumCameras) {
+    memcpy(latest_frame_[header.camera_id].data(), src,
+           image_width_ * image_height_);
+  }
 }
 
 void VideoWindow::notify_image_dim(int width, int height) {
@@ -372,16 +410,21 @@ void VideoWindow::notify_image_dim(int width, int height) {
 }
 
 void VideoWindow::resize_image() {
-  latest_frame_.resize(image_width_ * image_height_);
+  // Resize the frame buffers for both cameras
+  for (int i = 0; i < kNumCameras; ++i) {
+    latest_frame_[i].resize(image_width_ * image_height_);
 
-  glBindTexture(GL_TEXTURE_2D, bayer_texture_);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, image_width_, image_height_, 0, GL_RED,
-               GL_UNSIGNED_BYTE, nullptr);
+    // Update textures for this camera
+    glBindTexture(GL_TEXTURE_2D, bayer_texture_[i]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, image_width_, image_height_, 0,
+                 GL_RED, GL_UNSIGNED_BYTE, nullptr);
 
-  glBindTexture(GL_TEXTURE_2D, debayer_texture_);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, image_width_, image_height_, 0, GL_RGB,
-               GL_UNSIGNED_BYTE, nullptr);
+    glBindTexture(GL_TEXTURE_2D, debayer_texture_[i]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, image_width_, image_height_, 0,
+                 GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+  }
 
+  // Update PBOs
   for (int i = 0; i < kNumUnpackBuffers; ++i) {
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_list_[i]);
     glBufferData(GL_PIXEL_UNPACK_BUFFER,

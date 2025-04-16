@@ -43,9 +43,13 @@ class VideoWindow : public Fl_Gl_Window {
   GLuint vbo_;
   GLuint debayer_vao_;
   GLuint debayer_vbo_;  // constant ndc
-  GLuint debayer_fbo_;
-  GLuint debayer_texture_;
-  GLuint bayer_texture_;
+
+  // Two cameras setup
+  static const int kNumCameras = 2;
+  GLuint debayer_fbo_[kNumCameras];
+  GLuint debayer_texture_[kNumCameras];
+  GLuint bayer_texture_[kNumCameras];
+
   std::unique_ptr<telefacet::Shader> debayer_shader_;
   std::unique_ptr<telefacet::Shader> screen_shader_;
   bool dirty_image_dim_;
@@ -57,6 +61,9 @@ class VideoWindow : public Fl_Gl_Window {
   constexpr static int kNumUnpackBuffers = 2;
   GLuint pbo_list_[kNumUnpackBuffers];
   int pbo_cursor_;
-  std::vector<uint8_t> latest_frame_;
+  std::vector<std::vector<uint8_t>> latest_frame_;
+
   void resize_image();
+  void process_camera_frame(int camera_index);
+  void update_ndc_values();
 };
