@@ -1,49 +1,61 @@
-cmake_minimum_required(VERSION 3.11)
-
-project(telefacet)
+cmake_minimum_required(VERSION 3.20)
+project(telefacet LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-
-set(Boost_USE_STATIC_LIBS OFF)
-set(Boost_USE_MULTITHREADED ON)
-set(Boost_USE_STATIC_RUNTIME OFF)
-find_package(Boost 1.74 REQUIRED COMPONENTS system thread)
-if (NOT APPLE)
-  find_package(GLEW REQUIRED)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
 endif()
 
-option(USE_SYSTEM_FLTK "Use system-installed FLTK instead of downloading a standalone FLTK" OFF)
-
-include(FetchContent)
-
-if (USE_SYSTEM_FLTK)
-  find_package(FLTK 1.4 CONFIG REQUIRED)
-else()
-  FetchContent_Declare(
-    fltk
-    GIT_REPOSITORY https://github.com/fltk/fltk.git
-    GIT_TAG        release-1.4.2
-  )
-  FetchContent_MakeAvailable(fltk)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
 endif()
 
-add_subdirectory(lib)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Dependencies.cmake)
 
-# GLEW on Windows and macOS: https://github.com/fltk/fltk/blob/master/examples/CMakeLists.txt
-add_executable(telefacet telefacet.cpp)
-target_link_libraries(telefacet
-  PRIVATE
-    lib_telefacet
-    fltk::fltk
-    fltk::images
-    fltk::gl
-    Boost::thread
+# ----- Embed shader sources as C++ string literals at configure time -----
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/shaders/debayer.vert" DEBAYER_VERT_SRC)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/shaders/debayer.frag" DEBAYER_FRAG_SRC)
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbeddedShaders.hpp.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/telefacet/EmbeddedShaders.hpp"
+  @ONLY
 )
-if (NOT APPLE)
-  target_link_libraries(telefacet
-    PRIVATE
-      GLEW::GLEW
-  )
-endif()
+
+add_executable(telefacet
+  src/main.cpp
+  src/app/App.cpp
+  src/config/ConfigLoader.cpp
+  src/net/ChunkReassembler.cpp
+  src/net/WebSocketClient.cpp
+  src/net/MultiServerManager.cpp
+  src/data/FrameBufferPool.cpp
+  src/data/CameraStore.cpp
+  src/gl/Shader.cpp
+  src/gl/Debayer.cpp
+  src/ui/CameraView.cpp
+  src/ui/CameraGrid.cpp
+  src/ui/ControlPanel.cpp
+)
+
+target_include_directories(telefacet PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
+)
+
+target_link_libraries(telefacet PRIVATE
+  glfw
+  glad_gl_core_33
+  imgui
+  ixwebsocket
+  yaml-cpp::yaml-cpp
+  nlohmann_json::nlohmann_json
+  spdlog::spdlog
+  Threads::Threads
+)
+
+find_package(Threads REQUIRED)
+find_package(OpenGL REQUIRED)
+target_link_libraries(telefacet PRIVATE OpenGL::GL ${CMAKE_DL_LIBS})
