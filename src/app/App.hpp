@@ -8,7 +8,7 @@
 
 #include "config/ConfigLoader.hpp"
 #include "data/CameraStore.hpp"
-#include "gl/Debayer.hpp"
+#include "gl/YuvRenderer.hpp"
 #include "net/MultiServerManager.hpp"
 #include "ui/CameraGrid.hpp"
 #include "ui/ControlPanel.hpp"
@@ -34,7 +34,7 @@ class App {
   GLFWwindow*            window_ = nullptr;
   data::CameraStore      store_;
   std::unique_ptr<net::MultiServerManager> msm_;
-  std::unique_ptr<gl::Debayer>             debayer_;
+  std::unique_ptr<gl::YuvRenderer>         yuv_renderer_;
   std::unique_ptr<ui::CameraGrid>          grid_;
   std::unique_ptr<ui::ControlPanel>        panel_;
 };

@@ -101,12 +101,6 @@ void MultiServerManager::onDiscovery(
     store_.addCamera(server_index, dc.id, dc.sensor_type);
   }
   store_.rebuildGlobalIdsSorted();
-  // Apply per-camera AWB gains from config (keyed by global id).
-  auto roster = store_.snapshot();
-  for (auto& info : roster) {
-    auto gains = cfg_.gainsForGlobal(info.global_id);
-    if (auto* live = store_.find(info.global_id)) live->awb = gains;
-  }
 }
 
 void MultiServerManager::onFrame(std::size_t server_index,

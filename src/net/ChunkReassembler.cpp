@@ -60,6 +60,7 @@ void ChunkReassembler::handleStart(const std::uint8_t* data, std::size_t len) {
     buf->width          = hdr.width;
     buf->height         = hdr.height;
     buf->bytes_per_line = hdr.bytes_per_line;
+    buf->pixel_format   = hdr.pixel_format;
     buf->frames_saved   = hdr.frames_saved;
     buf->header_only    = true;
     if (cb_) cb_(std::move(buf));
@@ -67,13 +68,14 @@ void ChunkReassembler::handleStart(const std::uint8_t* data, std::size_t len) {
   }
 
   // Copy packed fields to locals before referencing/passing.
-  const std::uint32_t frame_uuid    = hdr.frame_uuid;
-  const std::uint32_t frame_id      = hdr.frame_id;
-  const std::uint32_t camera_id     = hdr.camera_id;
-  const std::uint32_t width         = hdr.width;
-  const std::uint32_t height        = hdr.height;
+  const std::uint32_t frame_uuid     = hdr.frame_uuid;
+  const std::uint32_t frame_id       = hdr.frame_id;
+  const std::uint32_t camera_id      = hdr.camera_id;
+  const std::uint32_t width          = hdr.width;
+  const std::uint32_t height         = hdr.height;
   const std::uint32_t bytes_per_line = hdr.bytes_per_line;
-  const std::uint32_t frames_saved  = hdr.frames_saved;
+  const std::uint32_t pixel_format   = hdr.pixel_format;
+  const std::uint32_t frames_saved   = hdr.frames_saved;
   const std::uint32_t total_chunks_v = hdr.total_chunks;
   const std::uint32_t total_size_v   = hdr.total_size;
 
@@ -85,6 +87,7 @@ void ChunkReassembler::handleStart(const std::uint8_t* data, std::size_t len) {
   inf.buf->width          = width;
   inf.buf->height         = height;
   inf.buf->bytes_per_line = bytes_per_line;
+  inf.buf->pixel_format   = pixel_format;
   inf.buf->frames_saved   = frames_saved;
   inf.buf->header_only    = false;
   inf.total_chunks        = total_chunks_v;

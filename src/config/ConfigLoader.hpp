@@ -1,10 +1,9 @@
 #pragma once
 
 // Mirrors telefacet-web/src/services/ConfigLoader.js. Loads a YAML file with
-// servers, camera_config, frame_saving and per-camera awb_gains.
+// servers, camera_config, and frame_saving.
 
 #include <cstdint>
-#include <map>
 #include <string>
 #include <vector>
 
@@ -37,20 +36,10 @@ struct FrameSavingCfg {
   int  checkerboard_num_threads = 4;
 };
 
-struct AwbGains {
-  float r = 1.0f;
-  float g = 1.0f;
-  float b = 1.0f;
-};
-
 struct Config {
   std::vector<ServerCfg> servers;
   CameraCfg              camera;
   FrameSavingCfg         saving;
-  // Keyed by "cam0", "cam1", ... (global camera id) — same convention as JS.
-  std::map<std::string, AwbGains> awb_gains;
-
-  AwbGains gainsForGlobal(std::size_t global_camera_id) const;
 };
 
 // Throws std::runtime_error on parse / validation failure.

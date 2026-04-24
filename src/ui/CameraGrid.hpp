@@ -7,14 +7,14 @@
 #include <unordered_map>
 
 #include "data/CameraStore.hpp"
-#include "gl/Debayer.hpp"
+#include "gl/YuvRenderer.hpp"
 #include "ui/CameraView.hpp"
 
 namespace telefacet::ui {
 
 class CameraGrid {
  public:
-  CameraGrid(data::CameraStore& store, gl::Debayer& debayer);
+  CameraGrid(data::CameraStore& store, gl::YuvRenderer& yuv_renderer);
 
   // Sync the set of CameraViews with the current roster snapshot. Cheap to
   // call every frame.
@@ -24,8 +24,8 @@ class CameraGrid {
   void render();
 
  private:
-  data::CameraStore&  store_;
-  gl::Debayer&        debayer_;
+  data::CameraStore&   store_;
+  gl::YuvRenderer&     yuv_renderer_;
   std::unordered_map<std::size_t, std::unique_ptr<CameraView>> views_;
 };
 

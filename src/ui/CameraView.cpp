@@ -7,28 +7,41 @@
 namespace telefacet::ui {
 
 CameraView::CameraView(std::size_t global_id, data::CameraStore& store,
-                       gl::Debayer& debayer)
-    : global_id_(global_id), store_(store), debayer_(debayer) {}
+                       gl::YuvRenderer& yuv_renderer)
+    : global_id_(global_id), store_(store), yuv_renderer_(yuv_renderer) {}
 
 CameraView::~CameraView() {
   if (fbo_color_) glDeleteTextures(1, &fbo_color_);
   if (fbo_) glDeleteFramebuffers(1, &fbo_);
-  if (src_tex_) glDeleteTextures(1, &src_tex_);
+  if (y_tex_) glDeleteTextures(1, &y_tex_);
+  if (u_tex_) glDeleteTextures(1, &u_tex_);
+  if (v_tex_) glDeleteTextures(1, &v_tex_);
 }
 
-void CameraView::ensureSourceTexture(int bpl, int h) {
-  if (src_tex_ && src_tex_w_ == bpl && src_tex_h_ == h) return;
-  if (!src_tex_) glGenTextures(1, &src_tex_);
-  glBindTexture(GL_TEXTURE_2D, src_tex_);
+static GLuint makeRedTex(int w, int h, GLenum min_filter, GLenum mag_filter) {
+  GLuint tex = 0;
+  glGenTextures(1, &tex);
+  glBindTexture(GL_TEXTURE_2D, tex);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, bpl, h, 0, GL_RED, GL_UNSIGNED_BYTE,
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE,
                nullptr);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  src_tex_w_ = bpl;
-  src_tex_h_ = h;
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, min_filter);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, mag_filter);
+  return tex;
+}
+
+void CameraView::ensureYuvTextures(int bpl, int h) {
+  if (y_tex_ && y_tex_w_ == bpl && y_tex_h_ == h) return;
+  if (y_tex_) glDeleteTextures(1, &y_tex_);
+  if (u_tex_) glDeleteTextures(1, &u_tex_);
+  if (v_tex_) glDeleteTextures(1, &v_tex_);
+  y_tex_ = makeRedTex(bpl,     h,     GL_NEAREST, GL_NEAREST);
+  u_tex_ = makeRedTex(bpl / 2, h / 2, GL_LINEAR,  GL_LINEAR);
+  v_tex_ = makeRedTex(bpl / 2, h / 2, GL_LINEAR,  GL_LINEAR);
+  y_tex_w_ = bpl;
+  y_tex_h_ = h;
 }
 
 void CameraView::ensureFbo(int w, int h) {
@@ -64,28 +77,35 @@ void CameraView::uploadIfNew() {
   image_h_      = static_cast<int>(frame->height);
 
   if (frame->header_only) {
-    // Nothing to draw — overlays use the metadata above.
     store_.pool().release(std::move(frame));
     return;
   }
 
-  const int bpl = static_cast<int>(frame->bytes_per_line);
-  ensureSourceTexture(bpl, image_h_);
+  const int bpl      = static_cast<int>(frame->bytes_per_line);
+  const int uvStride = bpl / 2;
+  const int uvHeight = image_h_ / 2;
+  const int ySize    = bpl * image_h_;
+  const int uvSize   = uvStride * uvHeight;
+
+  ensureYuvTextures(bpl, image_h_);
   ensureFbo(image_w_, image_h_);
 
-  glBindTexture(GL_TEXTURE_2D, src_tex_);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+  glBindTexture(GL_TEXTURE_2D, y_tex_);
   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, bpl, image_h_, GL_RED,
                   GL_UNSIGNED_BYTE, frame->data.data());
 
-  // Look up AWB gains via roster.
-  auto* info = store_.find(global_id_);
-  const float r = info ? info->awb.r : 1.0f;
-  const float g = info ? info->awb.g : 1.0f;
-  const float b = info ? info->awb.b : 1.0f;
+  glBindTexture(GL_TEXTURE_2D, u_tex_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, uvStride, uvHeight, GL_RED,
+                  GL_UNSIGNED_BYTE, frame->data.data() + ySize);
 
-  debayer_.render(src_tex_, image_w_, image_h_, bpl, r, g, b, fbo_, image_w_,
-                  image_h_);
+  glBindTexture(GL_TEXTURE_2D, v_tex_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, uvStride, uvHeight, GL_RED,
+                  GL_UNSIGNED_BYTE, frame->data.data() + ySize + uvSize);
+
+  yuv_renderer_.render(y_tex_, u_tex_, v_tex_, image_w_, image_h_, bpl,
+                       fbo_, image_w_, image_h_);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   have_image_ = true;
   store_.pool().release(std::move(frame));
@@ -152,7 +172,6 @@ bool CameraView::drawWindow() {
     const ImVec2 cursor = ImGui::GetCursorScreenPos();
     const ImVec2 padding((avail.x - disp.x) * 0.5f, (avail.y - disp.y) * 0.5f);
     ImGui::SetCursorScreenPos(ImVec2(cursor.x + padding.x, cursor.y + padding.y));
-    // ImTextureID is a void* — pass GL texture id reinterpreted to that type.
     ImGui::Image(reinterpret_cast<ImTextureID>(
                      static_cast<std::intptr_t>(fbo_color_)),
                  disp);

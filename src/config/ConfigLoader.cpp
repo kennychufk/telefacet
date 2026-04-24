@@ -27,13 +27,6 @@ void validateAddress(const std::string& addr, std::size_t idx) {
 
 }  // namespace
 
-AwbGains Config::gainsForGlobal(std::size_t global_camera_id) const {
-  const auto key = "cam" + std::to_string(global_camera_id);
-  auto it = awb_gains.find(key);
-  if (it != awb_gains.end()) return it->second;
-  return {};
-}
-
 Config loadFromFile(const std::string& path) {
   YAML::Node root;
   try {
@@ -101,24 +94,6 @@ Config loadFromFile(const std::string& path) {
       if (f["checkerboard_num_threads"])
         cfg.saving.checkerboard_num_threads =
             f["checkerboard_num_threads"].as<int>();
-    }
-  }
-
-  // ---- awb_gains (optional) ----
-  if (root["awb_gains"] && root["awb_gains"].IsMap()) {
-    for (const auto& kv : root["awb_gains"]) {
-      const auto key = kv.first.as<std::string>();
-      const auto& g = kv.second;
-      if (!g["r"] || !g["g"] || !g["b"]) {
-        throw std::runtime_error("awb_gains." + key + " must include r,g,b");
-      }
-      AwbGains gains{g["r"].as<float>(), g["g"].as<float>(), g["b"].as<float>()};
-      for (float v : {gains.r, gains.g, gains.b}) {
-        if (v < 0.5f || v > 2.5f) {
-          throw std::runtime_error("awb_gains." + key + " out of range [0.5,2.5]");
-        }
-      }
-      cfg.awb_gains.emplace(key, gains);
     }
   }
 

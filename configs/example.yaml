@@ -1,5 +1,4 @@
-# Example telefacet configuration. Mirrors the schema accepted by the
-# original telefacet-web client (ConfigLoader.js).
+# Example telefacet configuration (protocol v2).
 
 servers:
   - address: ws://localhost:9001
@@ -26,8 +25,4 @@ frame_saving:
   checkerboard_full_res_detection: false
   checkerboard_num_threads: 4
 
-# Per-global-camera AWB gains. Keys are cam0, cam1, ... matching global ids
-# assigned in (server_index, local_camera_id) sort order.
-awb_gains:
-  cam0: { r: 1.5, g: 1.0, b: 1.8 }
-  # cam1: { r: 1.6, g: 1.0, b: 1.7 }
+# awb_gains is not used in v2; AWB is applied by the ISP hardware.

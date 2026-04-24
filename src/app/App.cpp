@@ -65,7 +65,7 @@ void App::shutdown() {
   msm_.reset();
   grid_.reset();
   panel_.reset();
-  debayer_.reset();
+  yuv_renderer_.reset();
   if (window_) {
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -102,9 +102,9 @@ int App::run() {
   initWindow();
   initImGui();
 
-  debayer_ = std::make_unique<gl::Debayer>();
-  msm_     = std::make_unique<net::MultiServerManager>(store_, cfg_);
-  grid_    = std::make_unique<ui::CameraGrid>(store_, *debayer_);
+  yuv_renderer_ = std::make_unique<gl::YuvRenderer>();
+  msm_          = std::make_unique<net::MultiServerManager>(store_, cfg_);
+  grid_         = std::make_unique<ui::CameraGrid>(store_, *yuv_renderer_);
   panel_   = std::make_unique<ui::ControlPanel>(store_, *msm_);
 
   msm_->connectAll();

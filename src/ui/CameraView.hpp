@@ -1,7 +1,7 @@
 #pragma once
 
-// Owns one camera's GL_R8 texture, output FBO and the per-frame upload+draw
-// path. Drawn inside an ImGui window.
+// Owns one camera's YUV420 plane textures, output FBO and the per-frame
+// upload+draw path. Drawn inside an ImGui window.
 
 #include <glad/glad.h>
 
@@ -10,14 +10,14 @@
 #include <string>
 
 #include "data/CameraStore.hpp"
-#include "gl/Debayer.hpp"
+#include "gl/YuvRenderer.hpp"
 
 namespace telefacet::ui {
 
 class CameraView {
  public:
   CameraView(std::size_t global_id, data::CameraStore& store,
-             gl::Debayer& debayer);
+             gl::YuvRenderer& yuv_renderer);
   ~CameraView();
 
   CameraView(const CameraView&) = delete;
@@ -35,17 +35,19 @@ class CameraView {
 
  private:
   void ensureFbo(int w, int h);
-  void ensureSourceTexture(int bytes_per_line, int height);
+  void ensureYuvTextures(int bytes_per_line, int height);
 
   std::size_t          global_id_;
   data::CameraStore&   store_;
-  gl::Debayer&         debayer_;
+  gl::YuvRenderer&     yuv_renderer_;
   std::uint64_t        seen_seq_ = 0;
 
-  // Source: raw packed bytes uploaded as GL_R8.
-  GLuint src_tex_       = 0;
-  int    src_tex_w_     = 0;  // bytes_per_line
-  int    src_tex_h_     = 0;  // image height
+  // YUV420 source textures (GL_RED, single channel).
+  GLuint y_tex_     = 0;  // bytes_per_line × height
+  GLuint u_tex_     = 0;  // (bytes_per_line/2) × (height/2)
+  GLuint v_tex_     = 0;  // (bytes_per_line/2) × (height/2)
+  int    y_tex_w_   = 0;  // bytes_per_line
+  int    y_tex_h_   = 0;  // image height
 
   // Output: debayered RGB framebuffer.
   GLuint fbo_           = 0;

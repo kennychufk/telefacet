@@ -34,7 +34,7 @@ add_executable(telefacet
   src/data/FrameBufferPool.cpp
   src/data/CameraStore.cpp
   src/gl/Shader.cpp
-  src/gl/Debayer.cpp
+  src/gl/YuvRenderer.cpp
   src/ui/CameraView.cpp
   src/ui/CameraGrid.cpp
   src/ui/ControlPanel.cpp

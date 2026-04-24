@@ -1,6 +1,6 @@
 #pragma once
 
-// Recycles raw byte buffers used to hold one packed-Bayer frame. Avoids
+// Recycles raw byte buffers used to hold one frame. Avoids
 // per-frame heap churn on the network thread.
 
 #include <cstddef>
@@ -18,6 +18,7 @@ struct FrameBuffer {
   std::uint32_t width          = 0;
   std::uint32_t height         = 0;
   std::uint32_t bytes_per_line = 0;
+  std::uint32_t pixel_format   = 0;  // FourCC from ChunkHeader
   std::uint32_t frames_saved   = 0;
   bool          header_only    = false;
 };

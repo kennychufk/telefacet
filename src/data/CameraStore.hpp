@@ -12,7 +12,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "config/ConfigLoader.hpp"
 #include "data/FrameBufferPool.hpp"
 
 namespace telefacet::data {
@@ -23,7 +22,6 @@ struct CameraInfo {
   std::uint32_t local_camera_id = 0;
   std::string label;            // e.g. "cam0"
   std::string sensor_type;      // from discovery, e.g. "IMX296"
-  config::AwbGains awb;
 
   // Streaming UI flags (mutated from main/UI thread).
   bool streaming = false;

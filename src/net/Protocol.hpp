@@ -11,7 +11,7 @@ namespace telefacet::proto {
 
 inline constexpr std::uint32_t kChunkStartMagic = 0x4348554Eu;  // 'CHUN'
 inline constexpr std::uint32_t kChunkDataMagic  = 0x43484E4Bu;  // 'CHNK'
-inline constexpr std::uint32_t kChunkVersion    = 1u;
+inline constexpr std::uint32_t kChunkVersion    = 2u;
 
 // 8 bytes
 struct ChunkStartMarker {
@@ -19,7 +19,7 @@ struct ChunkStartMarker {
   std::uint32_t version;
 } __attribute__((packed));
 
-// 36 bytes
+// 40 bytes
 struct ChunkHeader {
   std::uint32_t frame_uuid;
   std::uint32_t frame_id;
@@ -29,6 +29,7 @@ struct ChunkHeader {
   std::uint32_t bytes_per_line;
   std::uint32_t width;
   std::uint32_t height;
+  std::uint32_t pixel_format;  // FourCC, little-endian; 0x32315559 = YU12/I420
   std::uint32_t frames_saved;
 } __attribute__((packed));
 
