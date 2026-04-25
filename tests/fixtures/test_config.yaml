@@ -1,0 +1,25 @@
+# Fixture config used by e2e_config_loader_test.cpp. Mirrors
+# configs/example.yaml at the standard resolution used by the e2e suite.
+
+servers:
+  - address: ws://localhost:9001
+
+camera_config:
+  width: 1456
+  height: 1088
+  crop_width: 1456
+  crop_height: 1088
+  crop_left: 0
+  crop_top: 0
+  v4l2_buffers: 4
+
+frame_saving:
+  mode: none
+  output_dir: camera_frames
+  prepend_timestamp_to_dir: false
+  batch_size: 10
+  writer_threads: 4
+  checkerboard_rows: 8
+  checkerboard_cols: 11
+  checkerboard_full_res_detection: false
+  checkerboard_num_threads: 4

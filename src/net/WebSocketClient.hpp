@@ -63,6 +63,7 @@ class WebSocketClient {
   bool configureCameras(std::uint32_t width, std::uint32_t height,
                         std::uint32_t crop_w, std::uint32_t crop_h,
                         std::uint32_t crop_l, std::uint32_t crop_t);
+  bool unconfigure();
   bool setSaveMode(const std::string& mode, const nlohmann::json& params);
   bool startCameras();
   bool stopCameras();

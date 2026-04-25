@@ -40,6 +40,12 @@ void MultiServerManager::configureAll() {
   }
 }
 
+void MultiServerManager::unconfigureAll() {
+  for (auto& c : clients_) {
+    if (c->connected()) c->unconfigure();
+  }
+}
+
 void MultiServerManager::startAllCameras() {
   for (auto& c : clients_) {
     if (c->connected()) c->startCameras();

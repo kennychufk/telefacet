@@ -23,6 +23,7 @@ class MultiServerManager {
 
   // Broadcast helpers — issued to every connected server.
   void configureAll();
+  void unconfigureAll();
   void startAllCameras();
   void stopAllCameras();
   void setSaveModeAll(const std::string& mode, const nlohmann::json& params);

@@ -49,6 +49,7 @@ inline constexpr std::size_t kChunkDataHeaderSize = sizeof(ChunkData);  // 16
 namespace cmd {
 inline constexpr const char* kDiscover         = "discover";
 inline constexpr const char* kConfigure        = "configure";
+inline constexpr const char* kUnconfigure      = "unconfigure";
 inline constexpr const char* kSetSaveMode      = "set_save_mode";
 inline constexpr const char* kStartCameras     = "start_cameras";
 inline constexpr const char* kStartStream      = "start_stream";

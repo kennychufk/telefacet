@@ -137,6 +137,10 @@ bool WebSocketClient::configureCameras(std::uint32_t w, std::uint32_t h,
   });
 }
 
+bool WebSocketClient::unconfigure() {
+  return sendCommand({{"cmd", proto::cmd::kUnconfigure}});
+}
+
 bool WebSocketClient::setSaveMode(const std::string& mode,
                                   const nlohmann::json& params) {
   return sendCommand(
