@@ -277,7 +277,8 @@ void ControlPanel::drawCameras(const Agg& agg,
   const bool cb = checkerboardMode();
   for (const auto& info : roster) {
     auto* live = store_.stats(info.global_id);
-    const float fps = live ? live->fps.load() : 0.0f;
+    const float fps  = live ? live->fps.load() : 0.0f;
+    const float sfps = live ? live->server_fps.load() : 0.0f;
     const std::uint32_t saved = live ? live->frames_saved.load() : 0u;
     ImGui::PushID(static_cast<int>(info.global_id));
     bool streaming = info.streaming;
@@ -291,7 +292,8 @@ void ControlPanel::drawCameras(const Agg& agg,
     ImGui::Text("%s (srv %zu/loc %u)", info.label.c_str(), info.server_index,
                 info.local_camera_id);
     ImGui::SameLine();
-    if (info.streaming) ImGui::TextColored(kGreen, "%.1f fps", fps);
+    // client / server fps, mirroring the web's clientFps / serverFps readout.
+    if (info.streaming) ImGui::TextColored(kGreen, "%.1f / %.1f fps", fps, sfps);
     else                ImGui::TextDisabled("--");
     if (cb) {
       ImGui::SameLine();

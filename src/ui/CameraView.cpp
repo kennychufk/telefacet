@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include <cmath>
 #include <cstdio>
 
 namespace telefacet::ui {
@@ -76,6 +77,15 @@ void CameraView::uploadIfNew() {
   image_w_      = static_cast<int>(frame->width);
   image_h_      = static_cast<int>(frame->height);
 
+  // Stash per-frame metadata for the draw pass before the pooled buffer is
+  // released. corner_sets is strictly per-frame: this copy replaces the last,
+  // so a frame with no detections clears the overlay.
+  timestamp_us_      = frame->timestamp_us;
+  frame_duration_us_ = frame->frame_duration_us;
+  lens_position_     = frame->lens_position;
+  af_state_          = frame->af_state;
+  corner_sets_       = frame->corner_sets;
+
   if (frame->header_only) {
     store_.pool().release(std::move(frame));
     return;
@@ -111,20 +121,46 @@ void CameraView::uploadIfNew() {
   store_.pool().release(std::move(frame));
 }
 
-bool CameraView::drawWindow() {
+// Human-readable libcamera AfState (0=Idle, 1=Scanning, 2=Focused, 3=Failed).
+static const char* afStateName(std::uint8_t s) {
+  switch (s) {
+    case 0:  return "idle";
+    case 1:  return "focusing";
+    case 2:  return "focused";
+    case 3:  return "failed";
+    default: return "n/a";
+  }
+}
+
+static ImU32 afStateColor(std::uint8_t s) {
+  switch (s) {
+    case 0:  return IM_COL32(160, 160, 170, 255);  // idle — muted
+    case 1:  return IM_COL32(255, 205,  60, 255);  // focusing — amber
+    case 2:  return IM_COL32(  0, 255, 128, 255);  // focused — green
+    case 3:  return IM_COL32(255,  92,  92, 255);  // failed — red
+    default: return IM_COL32(140, 140, 150, 255);  // n/a
+  }
+}
+
+bool CameraView::drawWindow(float x, float y, float w, float h) {
   auto* info = store_.find(global_id_);
   const std::string title =
       (info ? info->label : ("cam" + std::to_string(global_id_))) +
       "###cam" + std::to_string(global_id_);
   bool open = true;
-  ImGui::SetNextWindowSize(ImVec2(640, 540), ImGuiCond_FirstUseEver);
-  if (!ImGui::Begin(title.c_str(), &open)) {
+  ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
+  // Pin each tile to its grid cell; NoMove/NoResize keeps the layout rigid
+  // (the grid re-tiles from the streaming set every frame).
+  if (!ImGui::Begin(title.c_str(), &open,
+                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)) {
     ImGui::End();
     return open;
   }
 
   auto* live = store_.stats(global_id_);
-  const float fps = live ? live->fps.load() : 0.0f;
+  const float fps  = live ? live->fps.load() : 0.0f;
+  const float sfps = live ? live->server_fps.load() : 0.0f;
   const std::uint32_t fid =
       live ? live->last_frame_id.load() : frame_id_;
   const std::uint32_t fsv =
@@ -141,9 +177,9 @@ bool CameraView::drawWindow() {
       ImGui::TextUnformatted(info ? info->label.c_str() : "?");
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
-      ImGui::Text("fps");
+      ImGui::Text("fps (cli/srv)");
       ImGui::TableNextColumn();
-      ImGui::Text("%.1f", fps);
+      ImGui::Text("%.1f / %.1f", fps, sfps);
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
       ImGui::Text("frame_id");
@@ -171,27 +207,75 @@ bool CameraView::drawWindow() {
     }
     const ImVec2 cursor = ImGui::GetCursorScreenPos();
     const ImVec2 padding((avail.x - disp.x) * 0.5f, (avail.y - disp.y) * 0.5f);
-    ImGui::SetCursorScreenPos(ImVec2(cursor.x + padding.x, cursor.y + padding.y));
+    const ImVec2 img_origin(cursor.x + padding.x, cursor.y + padding.y);
+    ImGui::SetCursorScreenPos(img_origin);
     ImGui::Image(reinterpret_cast<ImTextureID>(
                      static_cast<std::intptr_t>(fbo_color_)),
                  disp);
+    const bool hovered = ImGui::IsItemHovered();
 
-    // Overlays
     auto* dl = ImGui::GetWindowDrawList();
     const ImU32 white  = IM_COL32(255, 255, 255, 255);
     const ImU32 green  = IM_COL32(  0, 255,   0, 255);
     const ImU32 blue   = IM_COL32(120, 180, 255, 255);
     const ImU32 orange = IM_COL32(255, 165,   0, 255);
+
+    // Checkerboard corner overlay. Corner coords are full-frame Y-plane pixels
+    // (map with width/height, never the padded stride), so scale by
+    // disp/image and offset onto the letterboxed image rect. Color by set_id
+    // for the 2x2 case; connect consecutive inner corners to trace scan order.
+    if (image_w_ > 0 && image_h_ > 0) {
+      const float sx = disp.x / static_cast<float>(image_w_);
+      const float sy = disp.y / static_cast<float>(image_h_);
+      static const ImU32 kSetColors[4] = {
+          IM_COL32(  0, 255, 128, 255), IM_COL32(255,  90,  90, 255),
+          IM_COL32( 90, 160, 255, 255), IM_COL32(255, 205,  60, 255)};
+      const bool multi = corner_sets_.size() > 1;
+      for (const auto& cs : corner_sets_) {
+        if (!(cs.flags & 0x01)) continue;  // only full-frame coords are mappable
+        const ImU32 col = multi ? kSetColors[cs.set_id & 0x03] : kSetColors[0];
+        ImVec2 prev;
+        bool have_prev = false;
+        for (const auto& c : cs.corners) {
+          const ImVec2 p(img_origin.x + c[0] * sx, img_origin.y + c[1] * sy);
+          if (have_prev) dl->AddLine(prev, p, col, 1.0f);
+          dl->AddCircleFilled(p, 3.0f, col);
+          prev = p;
+          have_prev = true;
+        }
+      }
+    }
+
+    // Text overlays: label (top-left), dual fps (top-right), frame/saved
+    // (bottom-left).
     char buf[64];
     if (info) {
       dl->AddText(ImVec2(cursor.x + 8, cursor.y + 6), white, info->label.c_str());
     }
-    std::snprintf(buf, sizeof(buf), "%.1f fps", fps);
-    dl->AddText(ImVec2(cursor.x + avail.x - 80, cursor.y + 6), green, buf);
+    std::snprintf(buf, sizeof(buf), "%.1f / %.1f fps", fps, sfps);
+    const float fps_w = ImGui::CalcTextSize(buf).x;
+    dl->AddText(ImVec2(cursor.x + avail.x - fps_w - 8, cursor.y + 6), green, buf);
     std::snprintf(buf, sizeof(buf), "frame %u", fid);
     dl->AddText(ImVec2(cursor.x + 8, cursor.y + avail.y - 36), blue, buf);
     std::snprintf(buf, sizeof(buf), "saved %u", fsv);
     dl->AddText(ImVec2(cursor.x + 8, cursor.y + avail.y - 18), orange, buf);
+
+    // Lens / AF hover overlay (bottom-right). Hidden when both are absent.
+    if (hovered && !(std::isnan(lens_position_) && af_state_ == 0xFF)) {
+      char lbuf[24];
+      if (std::isnan(lens_position_))
+        std::snprintf(lbuf, sizeof(lbuf), "-- D");
+      else
+        std::snprintf(lbuf, sizeof(lbuf), "%.2f D", lens_position_);
+      const char* afname = afStateName(af_state_);
+      const ImU32  afcol = afStateColor(af_state_);
+      const float lw = ImGui::CalcTextSize(lbuf).x;
+      const float aw = ImGui::CalcTextSize(afname).x;
+      const float ty = cursor.y + avail.y - 18;
+      const float tx = cursor.x + avail.x - (lw + 8 + aw) - 8;
+      dl->AddText(ImVec2(tx, ty), white, lbuf);
+      dl->AddText(ImVec2(tx + lw + 8, ty), afcol, afname);
+    }
   }
 
   ImGui::End();

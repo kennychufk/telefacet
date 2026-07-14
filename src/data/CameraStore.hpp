@@ -30,12 +30,22 @@ struct CameraInfo {
 struct CameraLiveStats {
   std::atomic<std::uint32_t> last_frame_id{0};
   std::atomic<std::uint32_t> frames_saved{0};
-  std::atomic<float>          fps{0.0f};
+  std::atomic<float>          fps{0.0f};         // client: frames decoded / s
+  std::atomic<float>          server_fps{0.0f};  // server: HW capture cadence
 
-  // Internal FPS computation
+  // Internal FPS computation (guarded by `mu`; mutated on the network thread).
   std::mutex mu;
   std::uint64_t fps_window_count = 0;
   std::chrono::steady_clock::time_point fps_window_start =
+      std::chrono::steady_clock::now();
+
+  // Server-side fps state: diff consecutive HW timestamps, normalized by the
+  // frame-id gap so dropped frames don't inflate the cadence (mirrors
+  // WebSocketManager.updateServerFpsStats). Rolling window of per-frame µs.
+  std::vector<double> server_durations;
+  std::uint64_t server_last_timestamp = 0;
+  std::int64_t  server_last_frame_id  = -1;   // <0 ⇒ no prior frame yet
+  std::chrono::steady_clock::time_point server_fps_wall =
       std::chrono::steady_clock::now();
 };
 

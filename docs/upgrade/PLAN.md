@@ -103,19 +103,35 @@ When finishing a stage: (1) confirm "Done when" holds, (2) write `stage-<next>-*
 capturing what changed, what's verified, known gaps, and the exact next tasks,
 (3) update the "Status" line below, (4) commit only if the user asks.
 
-**Status:** Stages 1–2 **done** (v5 wire core; all six commands + per-server
-config + `set_save_mode` forwarding + `checkerboard2x2`; legacy dead code
-deleted). Stage 3 (control UX + focus/exposure/frame-duration) **done and
-verified live** against the Pi at 192.168.1.239 (IMX519 @ 2328x1748): the
-control panel is a working Discover→Configure→Start→Stream pipeline (advance/
-retreat, LIVE indicator) driven by real server state; focus (auto/manual + lens
-slider, real 0–15 dpt limits), exposure (auto AE / manual shutter) and
-frame-duration lock (real hw limits) all round-trip to the server; save mode has
-live-editable checkerboard params and per-camera saved counts; live frames
-render. One core-layer addition was required: `MultiServerManager::getStateAll()`
-+ a ControlPanel `get_state` poll, because the server signals transitions via
-`status`, not a proactive `state`, so `serverState()` was otherwise stale. GUI +
-e2e build clean. **e2e suite still red against hardware** — the `tests/` fixture
-resolution `1456x1088` is an invalid sensor mode (`bitDepth/size mismatch`);
-pre-existing, needs a valid-mode fixture (see stage-4 doc "Known gaps"). Next:
-Stage 4 (`stage-4-display-parity.md`).
+**Status:** **v2→v5 parity upgrade COMPLETE — all four stages done.** Stages 1–2
+(v5 wire core; all six commands + per-server config + `set_save_mode` forwarding
++ `checkerboard2x2`; legacy dead code deleted). Stage 3 (control UX +
+focus/exposure/frame-duration) done and verified live. Stage 4 (display parity)
+**done and verified live** against the Pi at 192.168.1.239 (IMX519 @ 2328x1748):
+- **Dual fps** — `server_fps` added to `CameraLiveStats`, computed on the network
+  thread in `CameraStore::publishFrame` (HW `timestamp_us` delta ÷ frame-id gap,
+  10-sample rolling window, `frame_duration_us` fallback; guards first frame,
+  zero/negative deltas, frame-id wrap). Shown as `client / server` fps in both
+  the `CameraView` overlay and the ControlPanel Cameras row. Verified live:
+  `4.8 / 15.0 fps`, both non-zero.
+- **Lens / AF hover overlay** — `CameraView` stashes `lens_position` / `af_state`
+  (+ timing + corners) off the frame before pool release; on image hover shows
+  e.g. `5.87 D  focused` (AfState byte → label + color), hidden on mouse-leave
+  and when NaN/`0xFF`. Verified live.
+- **Checkerboard corner overlay** — full-frame Y-plane corner coords mapped onto
+  the letterboxed image rect (reusing the `Image` transform), points+lines
+  colored by `set_id` for the 2×2 case, `flags` bit0 respected. Code + build
+  verified; **not exercised live** (no physical checkerboard in the Pi's view —
+  `saved 0`, no board detected). Mapping reuses the already-verified letterbox
+  transform.
+- **Streaming-only grid** — `CameraGrid` now syncs/tiles only `info.streaming`
+  cameras via a ported `getGridDimensions`, pinned to the viewport work area as a
+  `NoBringToFrontOnFocus` background layer so the control panel stays reachable
+  above it. Verified live: single streaming cam fills the viewport; stopping the
+  stream empties the grid; idle cameras never shown; P hotkey + dockspace kept.
+
+GUI + e2e build clean. **e2e suite still red against hardware** — the `tests/`
+fixture resolution `1456x1088` is an invalid sensor mode (`bitDepth/size
+mismatch`); pre-existing (predates Stage 3), needs a valid-mode fixture (see
+stage-4 doc "Known gaps"). No further stages — the client is at full display +
+control parity with `telefacet-web` on protocol v5.
