@@ -103,13 +103,19 @@ When finishing a stage: (1) confirm "Done when" holds, (2) write `stage-<next>-*
 capturing what changed, what's verified, known gaps, and the exact next tasks,
 (3) update the "Status" line below, (4) commit only if the user asks.
 
-**Status:** Stage 1 **done** (v5 wire core; confirmed rendering against a live
-v5 server). Stage 2 (commands / per-server config / cleanup) **code-complete**:
-all six new commands + connect-time `get_state` + `state`/limits response
-parsing added; per-server sensor/resolution config; `set_save_mode` now forwards
-YAML params; `checkerboard2x2` selectable; cropping removed everywhere; legacy
-dead code (`telefacet.cpp`, `include/`, `lib/`, `src/gl/Debayer.*`) deleted.
-GUI + e2e build clean; `ConfigLoader` unit tests pass; command JSON shapes +
-limits null-handling verified with synthetic checks. **Not yet smoke-tested
-against live Pi hardware** (focus/exposure/state round-trips) — do that before
-Stage 3. Next: Stage 3 (`stage-3-control-ux.md`).
+**Status:** Stages 1–2 **done** (v5 wire core; all six commands + per-server
+config + `set_save_mode` forwarding + `checkerboard2x2`; legacy dead code
+deleted). Stage 3 (control UX + focus/exposure/frame-duration) **done and
+verified live** against the Pi at 192.168.1.239 (IMX519 @ 2328x1748): the
+control panel is a working Discover→Configure→Start→Stream pipeline (advance/
+retreat, LIVE indicator) driven by real server state; focus (auto/manual + lens
+slider, real 0–15 dpt limits), exposure (auto AE / manual shutter) and
+frame-duration lock (real hw limits) all round-trip to the server; save mode has
+live-editable checkerboard params and per-camera saved counts; live frames
+render. One core-layer addition was required: `MultiServerManager::getStateAll()`
++ a ControlPanel `get_state` poll, because the server signals transitions via
+`status`, not a proactive `state`, so `serverState()` was otherwise stale. GUI +
+e2e build clean. **e2e suite still red against hardware** — the `tests/` fixture
+resolution `1456x1088` is an invalid sensor mode (`bitDepth/size mismatch`);
+pre-existing, needs a valid-mode fixture (see stage-4 doc "Known gaps"). Next:
+Stage 4 (`stage-4-display-parity.md`).

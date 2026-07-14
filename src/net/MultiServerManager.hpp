@@ -27,6 +27,10 @@ class MultiServerManager {
   void unconfigureAll();
   void startAllCameras();
   void stopAllCameras();
+  // Re-query get_state on every connected server. The server reports lifecycle
+  // transitions via `status` (not a proactive `state`), so the UI polls this to
+  // keep serverState() honest after configure/start/stop and external changes.
+  void getStateAll();
   void setSaveModeAll(const std::string& mode, const nlohmann::json& params);
   void setHeaderOnlyAll(bool enabled);
   void resetFrameCountsAll();
@@ -42,6 +46,9 @@ class MultiServerManager {
   // configured mode string (used to seed the control panel).
   nlohmann::json savingParamsFromConfig() const;
   const std::string& configuredSaveMode() const { return cfg_.saving.mode; }
+  // The loaded frame_saving config, used to seed the (now live-editable)
+  // save-mode controls in the UI.
+  const config::FrameSavingCfg& savingConfig() const { return cfg_.saving; }
 
   // Per-camera (global id) routing helpers.
   bool startStream(std::size_t global_camera_id);

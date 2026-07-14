@@ -56,6 +56,12 @@ void MultiServerManager::stopAllCameras() {
   }
 }
 
+void MultiServerManager::getStateAll() {
+  for (auto& c : clients_) {
+    if (c->connected()) c->getState();
+  }
+}
+
 void MultiServerManager::setSaveModeAll(const std::string& mode,
                                          const nlohmann::json& params) {
   for (auto& c : clients_) {

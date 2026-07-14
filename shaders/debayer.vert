@@ -1,7 +1,7 @@
 #version 330 core
 
-// Fullscreen triangle covering the viewport with a 180-degree rotated UV
-// space, matching telefacet-web/src/webgl/Debayer.js.
+// Fullscreen triangle covering the viewport, rendering in the raw YUV buffer's
+// native orientation, matching telefacet-web/src/webgl/Debayer.js.
 out vec2 v_texCoord;
 
 void main() {
@@ -13,6 +13,6 @@ void main() {
 
     // Untransformed UV in [0,2]x[0,2]; clip restricts to [0,1]x[0,1].
     vec2 uv = vec2((gl_VertexID & 1) * 2, (gl_VertexID & 2));
-    // 180-degree rotation (matches the JS vertex shader).
-    v_texCoord = vec2(1.0 - uv.x, 1.0 - uv.y);
+    // Render in the raw buffer's native orientation (no rotation).
+    v_texCoord = uv;
 }
