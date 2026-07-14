@@ -1,28 +1,26 @@
 # Example telefacet configuration (protocol v5).
 
 servers:
+    # Sensor type and resolution are per-server (a client may talk to servers
+    # running different sensors). All three are optional — an omitted field
+    # falls back to the connected server's own default.
   - address: ws://localhost:9001
+    sensor: imx519
+    width: 1456
+    height: 1088
   # - address: ws://192.168.1.101:9001
-
-camera_config:
-  width: 1456
-  height: 1088
-  crop_width: 1456
-  crop_height: 1088
-  crop_left: 0
-  crop_top: 0
-  v4l2_buffers: 4
+  #   sensor: imx708
+  #   width: 2304
+  #   height: 1296
 
 frame_saving:
-  mode: none                  # none | buffer | batch | checkerboard
+  mode: none                  # none | buffer | batch | checkerboard | checkerboard2x2
   output_dir: camera_frames
   prepend_timestamp_to_dir: false
   batch_size: 10
   writer_threads: 4
-  # checkerboard mode only:
+  # checkerboard / checkerboard2x2 modes only:
   checkerboard_rows: 8
   checkerboard_cols: 11
   checkerboard_full_res_detection: false
   checkerboard_num_threads: 4
-
-# awb_gains is not used in v2; AWB is applied by the ISP hardware.

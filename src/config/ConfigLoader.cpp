@@ -45,35 +45,22 @@ Config loadFromFile(const std::string& path) {
   for (std::size_t i = 0; i < root["servers"].size(); ++i) {
     const auto& s = root["servers"][i];
     requireKey(s, "address");
-    ServerCfg sc{s["address"].as<std::string>()};
+    ServerCfg sc;
+    sc.address = s["address"].as<std::string>();
     validateAddress(sc.address, i);
+    // Per-server sensor + resolution are optional (fall back to server default).
+    if (s["sensor"]) sc.sensor = s["sensor"].as<std::string>();
+    if (s["width"])  sc.width  = s["width"].as<std::uint32_t>();
+    if (s["height"]) sc.height = s["height"].as<std::uint32_t>();
     cfg.servers.push_back(std::move(sc));
-  }
-
-  // ---- camera_config ----
-  requireKey(root, "camera_config");
-  const auto& cam = root["camera_config"];
-  for (const char* k :
-       {"width", "height", "crop_width", "crop_height", "crop_left",
-        "crop_top"}) {
-    requireKey(cam, k);
-  }
-  cfg.camera.width        = cam["width"].as<std::uint32_t>();
-  cfg.camera.height       = cam["height"].as<std::uint32_t>();
-  cfg.camera.crop_width   = cam["crop_width"].as<std::uint32_t>();
-  cfg.camera.crop_height  = cam["crop_height"].as<std::uint32_t>();
-  cfg.camera.crop_left    = cam["crop_left"].as<std::uint32_t>();
-  cfg.camera.crop_top     = cam["crop_top"].as<std::uint32_t>();
-  if (cam["v4l2_buffers"]) {
-    cfg.camera.v4l2_buffers = cam["v4l2_buffers"].as<std::uint32_t>();
   }
 
   // ---- frame_saving (optional, with defaults) ----
   if (root["frame_saving"]) {
     const auto& f = root["frame_saving"];
     if (f["mode"]) cfg.saving.mode = f["mode"].as<std::string>();
-    static const std::vector<std::string> valid = {"none", "buffer", "batch",
-                                                   "checkerboard"};
+    static const std::vector<std::string> valid = {
+        "none", "buffer", "batch", "checkerboard", "checkerboard2x2"};
     if (std::find(valid.begin(), valid.end(), cfg.saving.mode) ==
         valid.end()) {
       throw std::runtime_error("frame_saving.mode invalid: " + cfg.saving.mode);
@@ -83,7 +70,8 @@ Config loadFromFile(const std::string& path) {
       cfg.saving.prepend_timestamp_to_dir = f["prepend_timestamp_to_dir"].as<bool>();
     if (f["batch_size"])     cfg.saving.batch_size     = f["batch_size"].as<std::size_t>();
     if (f["writer_threads"]) cfg.saving.writer_threads = f["writer_threads"].as<std::size_t>();
-    if (cfg.saving.mode == "checkerboard") {
+    if (cfg.saving.mode == "checkerboard" ||
+        cfg.saving.mode == "checkerboard2x2") {
       if (f["checkerboard_rows"])
         cfg.saving.checkerboard_rows = f["checkerboard_rows"].as<int>();
       if (f["checkerboard_cols"])

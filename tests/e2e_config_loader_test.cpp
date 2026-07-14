@@ -14,13 +14,11 @@ TEST(ConfigLoader, LoadsExampleYaml) {
 
   ASSERT_EQ(cfg.servers.size(), 1u);
   EXPECT_EQ(cfg.servers[0].address, "ws://localhost:9001");
-
-  EXPECT_EQ(cfg.camera.width, 1456u);
-  EXPECT_EQ(cfg.camera.height, 1088u);
-  EXPECT_EQ(cfg.camera.crop_width, 1456u);
-  EXPECT_EQ(cfg.camera.crop_height, 1088u);
-  EXPECT_EQ(cfg.camera.crop_left, 0u);
-  EXPECT_EQ(cfg.camera.crop_top, 0u);
+  EXPECT_EQ(cfg.servers[0].sensor, "imx519");
+  ASSERT_TRUE(cfg.servers[0].width.has_value());
+  ASSERT_TRUE(cfg.servers[0].height.has_value());
+  EXPECT_EQ(*cfg.servers[0].width, 1456u);
+  EXPECT_EQ(*cfg.servers[0].height, 1088u);
 
   EXPECT_EQ(cfg.saving.mode, "none");
 }

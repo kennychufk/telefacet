@@ -46,9 +46,7 @@ TEST(SaveMode, NoneProducesNoFiles) {
 
   TestCameraCfg cfg;
   c.sendAndExpectStatus([&] {
-    return c.raw().configureCameras(cfg.width, cfg.height, cfg.crop_width,
-                                    cfg.crop_height, cfg.crop_left,
-                                    cfg.crop_top);
+    return c.raw().configureCameras(cfg.width, cfg.height);
   });
   c.sendAndExpectStatus([&] {
     return c.raw().setSaveMode("none", {{"output_dir", out.string()}});
@@ -70,9 +68,7 @@ TEST(SaveMode, BufferWritesFilesOnStop) {
 
   TestCameraCfg cfg;
   c.sendAndExpectStatus([&] {
-    return c.raw().configureCameras(cfg.width, cfg.height, cfg.crop_width,
-                                    cfg.crop_height, cfg.crop_left,
-                                    cfg.crop_top);
+    return c.raw().configureCameras(cfg.width, cfg.height);
   });
   c.sendAndExpectStatus([&] {
     return c.raw().setSaveMode("buffer", {{"output_dir", out.string()}});
@@ -94,9 +90,7 @@ TEST(SaveMode, BatchWritesFilesWhileRunning) {
 
   TestCameraCfg cfg;
   c.sendAndExpectStatus([&] {
-    return c.raw().configureCameras(cfg.width, cfg.height, cfg.crop_width,
-                                    cfg.crop_height, cfg.crop_left,
-                                    cfg.crop_top);
+    return c.raw().configureCameras(cfg.width, cfg.height);
   });
   c.sendAndExpectStatus([&] {
     return c.raw().setSaveMode("batch", {{"output_dir", out.string()},
@@ -120,9 +114,7 @@ TEST(SaveMode, CheckerboardRunsWithoutError) {
 
   TestCameraCfg cfg;
   c.sendAndExpectStatus([&] {
-    return c.raw().configureCameras(cfg.width, cfg.height, cfg.crop_width,
-                                    cfg.crop_height, cfg.crop_left,
-                                    cfg.crop_top);
+    return c.raw().configureCameras(cfg.width, cfg.height);
   });
   c.sendAndExpectStatus([&] {
     return c.raw().setSaveMode(

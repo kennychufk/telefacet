@@ -8,8 +8,8 @@ MultiServerManager::MultiServerManager(data::CameraStore& store,
                                        const config::Config& cfg)
     : store_(store), cfg_(cfg) {
   for (std::size_t i = 0; i < cfg_.servers.size(); ++i) {
-    auto client = std::make_unique<WebSocketClient>(i, cfg_.servers[i].address,
-                                                    store_.pool());
+    auto client = std::make_unique<WebSocketClient>(
+        i, cfg_.servers[i].address, store_.pool(), cfg_.servers[i].sensor);
     client->setOnDiscovery([this](std::size_t idx,
                                   const std::vector<DiscoveredCamera>& cs) {
       onDiscovery(idx, cs);
@@ -32,11 +32,9 @@ void MultiServerManager::disconnectAll() {
 
 void MultiServerManager::configureAll() {
   for (auto& c : clients_) {
-    if (c->connected()) {
-      c->configureCameras(cfg_.camera.width, cfg_.camera.height,
-                          cfg_.camera.crop_width, cfg_.camera.crop_height,
-                          cfg_.camera.crop_left, cfg_.camera.crop_top);
-    }
+    if (!c->connected()) continue;
+    const auto& sc = cfg_.servers[c->serverIndex()];
+    c->configureCameras(sc.width, sc.height);
   }
 }
 
@@ -75,6 +73,55 @@ void MultiServerManager::resetFrameCountsAll() {
   for (auto& c : clients_) {
     if (c->connected()) c->resetFrameCounts();
   }
+}
+
+void MultiServerManager::setLensPositionAll(double lens_position) {
+  for (auto& c : clients_) {
+    if (c->connected()) c->setLensPosition(lens_position);
+  }
+}
+
+void MultiServerManager::setExposureTimeAll(std::int64_t exposure_time_us) {
+  for (auto& c : clients_) {
+    if (c->connected()) c->setExposureTime(exposure_time_us);
+  }
+}
+
+void MultiServerManager::setFrameDurationAll(std::int64_t frame_duration_us) {
+  for (auto& c : clients_) {
+    if (c->connected()) c->setFrameDuration(frame_duration_us);
+  }
+}
+
+bool MultiServerManager::getFrameDurationLimits() {
+  for (auto& c : clients_) {
+    if (c->connected()) return c->getFrameDurationLimits();
+  }
+  return false;
+}
+
+bool MultiServerManager::getLensPositionLimits() {
+  for (auto& c : clients_) {
+    if (c->connected()) return c->getLensPositionLimits();
+  }
+  return false;
+}
+
+nlohmann::json MultiServerManager::savingParamsFromConfig() const {
+  const auto& s = cfg_.saving;
+  nlohmann::json p = {
+      {"output_dir", s.output_dir},
+      {"prepend_timestamp_to_dir", s.prepend_timestamp_to_dir},
+      {"batch_size", s.batch_size},
+      {"writer_threads", s.writer_threads},
+  };
+  if (s.mode == "checkerboard" || s.mode == "checkerboard2x2") {
+    p["checkerboard_rows"] = s.checkerboard_rows;
+    p["checkerboard_cols"] = s.checkerboard_cols;
+    p["checkerboard_full_res_detection"] = s.checkerboard_full_res_detection;
+    p["checkerboard_num_threads"] = s.checkerboard_num_threads;
+  }
+  return p;
 }
 
 bool MultiServerManager::startStream(std::size_t global_camera_id) {

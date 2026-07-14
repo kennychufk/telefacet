@@ -7,9 +7,10 @@
 namespace telefacet::net {
 
 WebSocketClient::WebSocketClient(std::size_t server_index, std::string address,
-                                 data::FrameBufferPool& pool)
+                                 data::FrameBufferPool& pool, std::string sensor)
     : server_index_(server_index),
       address_(std::move(address)),
+      sensor_(std::move(sensor)),
       pool_(pool),
       reassembler_(
           pool_,
@@ -45,8 +46,10 @@ void WebSocketClient::onMessage(const ix::WebSocketMessagePtr& msg) {
       connected_.store(true);
       spdlog::info("[ws#{}] connected", server_index_);
       if (on_conn_) on_conn_(server_index_, true);
-      // Mirror JS: discover immediately on connect.
+      // Mirror JS: discover and sync server state immediately on connect
+      // (don't assume IDLE — see protocol §4.2).
       discover();
+      getState();
       break;
 
     case ix::WebSocketMessageType::Close:
@@ -99,6 +102,44 @@ void WebSocketClient::handleText(const std::string& text) {
     }
     spdlog::info("[ws#{}] discovered {} cameras", server_index_, cams.size());
     if (on_discovery_) on_discovery_(server_index_, cams);
+  } else if (type == "state") {
+    const std::string state = j.value("state", std::string{});
+    {
+      std::lock_guard<std::mutex> lk(meta_mu_);
+      server_state_ = state;
+    }
+    spdlog::info("[ws#{}] server state: {}", server_index_, state);
+  } else if (type == "frame_duration_limits") {
+    FrameDurationLimits fdl;
+    fdl.valid       = true;
+    fdl.min         = j.value("min", std::int64_t{0});
+    fdl.max         = j.value("max", std::int64_t{0});
+    fdl.num_cameras = j.value("num_cameras", 0);
+    if (j.contains("current") && j["current"].is_object()) {
+      fdl.has_current = true;
+      fdl.current_min = j["current"].value("min", std::int64_t{0});
+      fdl.current_max = j["current"].value("max", std::int64_t{0});
+    }
+    {
+      std::lock_guard<std::mutex> lk(meta_mu_);
+      frame_duration_limits_ = fdl;
+    }
+  } else if (type == "lens_position_limits") {
+    // min/max/default are numbers or JSON null (module has no focuser).
+    LensPositionLimits lpl;
+    lpl.valid       = true;
+    lpl.num_cameras = j.value("num_cameras", 0);
+    auto num = [&](const char* k) -> std::optional<double> {
+      if (j.contains(k) && !j[k].is_null()) return j[k].get<double>();
+      return std::nullopt;
+    };
+    lpl.min = num("min");
+    lpl.max = num("max");
+    lpl.def = num("default");
+    {
+      std::lock_guard<std::mutex> lk(meta_mu_);
+      lens_position_limits_ = lpl;
+    }
   } else if (type == "status") {
     if (on_status_)
       on_status_(server_index_, type, j.value("message", std::string{}));
@@ -124,17 +165,22 @@ bool WebSocketClient::sendCommand(const nlohmann::json& cmd) {
 }
 
 bool WebSocketClient::discover() {
-  return sendCommand({{"cmd", proto::cmd::kDiscover}});
+  nlohmann::json cmd = {{"cmd", proto::cmd::kDiscover}};
+  if (!sensor_.empty()) cmd["params"] = {{"sensor", sensor_}};
+  return sendCommand(cmd);
 }
 
-bool WebSocketClient::configureCameras(std::uint32_t w, std::uint32_t h,
-                                       std::uint32_t cw, std::uint32_t ch,
-                                       std::uint32_t cl, std::uint32_t ct) {
-  return sendCommand({
-      {"cmd", proto::cmd::kConfigure},
-      {"params", {{"width", w}, {"height", h}, {"crop_width", cw},
-                  {"crop_height", ch}, {"crop_left", cl}, {"crop_top", ct}}},
-  });
+bool WebSocketClient::getState() {
+  return sendCommand({{"cmd", proto::cmd::kGetState}});
+}
+
+bool WebSocketClient::configureCameras(std::optional<std::uint32_t> w,
+                                       std::optional<std::uint32_t> h) {
+  // Only send fields that were configured; omitted ⇒ server keeps its default.
+  nlohmann::json params = nlohmann::json::object();
+  if (w) params["width"] = *w;
+  if (h) params["height"] = *h;
+  return sendCommand({{"cmd", proto::cmd::kConfigure}, {"params", params}});
 }
 
 bool WebSocketClient::unconfigure() {
@@ -173,6 +219,44 @@ bool WebSocketClient::setHeaderOnly(bool enabled) {
   header_only_.store(enabled);
   return sendCommand(
       {{"cmd", proto::cmd::kSetHeaderOnly}, {"enabled", enabled}});
+}
+
+bool WebSocketClient::setLensPosition(double lens_position) {
+  return sendCommand(
+      {{"cmd", proto::cmd::kSetLensPosition}, {"lens_position", lens_position}});
+}
+
+bool WebSocketClient::setExposureTime(std::int64_t exposure_time_us) {
+  return sendCommand({{"cmd", proto::cmd::kSetExposureTime},
+                      {"exposure_time", exposure_time_us}});
+}
+
+bool WebSocketClient::setFrameDuration(std::int64_t frame_duration_us) {
+  return sendCommand({{"cmd", proto::cmd::kSetFrameDuration},
+                      {"frame_duration", frame_duration_us}});
+}
+
+bool WebSocketClient::getFrameDurationLimits() {
+  return sendCommand({{"cmd", proto::cmd::kGetFrameDurationLimits}});
+}
+
+bool WebSocketClient::getLensPositionLimits() {
+  return sendCommand({{"cmd", proto::cmd::kGetLensPositionLimits}});
+}
+
+std::string WebSocketClient::serverState() const {
+  std::lock_guard<std::mutex> lk(meta_mu_);
+  return server_state_;
+}
+
+FrameDurationLimits WebSocketClient::frameDurationLimits() const {
+  std::lock_guard<std::mutex> lk(meta_mu_);
+  return frame_duration_limits_;
+}
+
+LensPositionLimits WebSocketClient::lensPositionLimits() const {
+  std::lock_guard<std::mutex> lk(meta_mu_);
+  return lens_position_limits_;
 }
 
 }  // namespace telefacet::net

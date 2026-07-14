@@ -11,7 +11,7 @@
 //   c.connect();
 //   auto cams = c.waitForDiscovery();
 //   c.sendAndExpectStatus(
-//       [&] { return c.raw().configureCameras(1456, 1088, 1456, 1088, 0, 0); },
+//       [&] { return c.raw().configureCameras(1456, 1088); },
 //       /*contains=*/"YUV420");
 //   c.sendAndExpectStatus([&] { return c.raw().startCameras(); });
 //   c.sendAndExpectStatus([&] { return c.raw().startStream(cams[0].id); });

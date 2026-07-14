@@ -3,15 +3,9 @@
 
 servers:
   - address: ws://localhost:9001
-
-camera_config:
-  width: 1456
-  height: 1088
-  crop_width: 1456
-  crop_height: 1088
-  crop_left: 0
-  crop_top: 0
-  v4l2_buffers: 4
+    sensor: imx519
+    width: 1456
+    height: 1088
 
 frame_saving:
   mode: none

@@ -24,9 +24,7 @@ std::uint32_t bringUpStreaming(BlockingClient& c) {
 
   TestCameraCfg cfg;
   c.sendAndExpectStatus([&] {
-    return c.raw().configureCameras(cfg.width, cfg.height, cfg.crop_width,
-                                    cfg.crop_height, cfg.crop_left,
-                                    cfg.crop_top);
+    return c.raw().configureCameras(cfg.width, cfg.height);
   });
   c.sendAndExpectStatus([&] { return c.raw().startCameras(); });
   c.sendAndExpectStatus([&] { return c.raw().startStream(cams[0].id); });
@@ -87,9 +85,7 @@ TEST(Protocol, HeaderOnlyMode) {
 
   TestCameraCfg cfg;
   c.sendAndExpectStatus([&] {
-    return c.raw().configureCameras(cfg.width, cfg.height, cfg.crop_width,
-                                    cfg.crop_height, cfg.crop_left,
-                                    cfg.crop_top);
+    return c.raw().configureCameras(cfg.width, cfg.height);
   });
   c.sendAndExpectStatus([&] { return c.raw().setHeaderOnly(true); });
   c.sendAndExpectStatus([&] { return c.raw().startCameras(); });

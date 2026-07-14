@@ -4,6 +4,7 @@
 // in CameraStore. Mirrors telefacet-web/src/services/WebSocketManager.js's
 // MultiServerManager.
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,6 +30,18 @@ class MultiServerManager {
   void setSaveModeAll(const std::string& mode, const nlohmann::json& params);
   void setHeaderOnlyAll(bool enabled);
   void resetFrameCountsAll();
+  // Global camera controls (applied identically on every server, §4.12–4.14).
+  void setLensPositionAll(double lens_position);
+  void setExposureTimeAll(std::int64_t exposure_time_us);
+  void setFrameDurationAll(std::int64_t frame_duration_us);
+  // Limits share a sensor across a server, so query the first connected one.
+  bool getFrameDurationLimits();
+  bool getLensPositionLimits();
+
+  // set_save_mode params built from the loaded frame_saving config, and the
+  // configured mode string (used to seed the control panel).
+  nlohmann::json savingParamsFromConfig() const;
+  const std::string& configuredSaveMode() const { return cfg_.saving.mode; }
 
   // Per-camera (global id) routing helpers.
   bool startStream(std::size_t global_camera_id);

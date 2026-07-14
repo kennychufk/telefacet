@@ -17,9 +17,7 @@ namespace {
 void configure(BlockingClient& c) {
   TestCameraCfg cfg;
   c.sendAndExpectStatus([&] {
-    return c.raw().configureCameras(cfg.width, cfg.height, cfg.crop_width,
-                                    cfg.crop_height, cfg.crop_left,
-                                    cfg.crop_top);
+    return c.raw().configureCameras(cfg.width, cfg.height);
   });
 }
 

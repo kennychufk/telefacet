@@ -6,12 +6,23 @@
 namespace telefacet::ui {
 
 namespace {
-const char* kSaveModes[] = {"none", "buffer", "batch", "checkerboard"};
+const char* kSaveModes[] = {"none", "buffer", "batch", "checkerboard",
+                            "checkerboard2x2"};
 }
 
 ControlPanel::ControlPanel(data::CameraStore& store,
                            net::MultiServerManager& msm)
-    : store_(store), msm_(msm) {}
+    : store_(store), msm_(msm) {
+  // Seed the save-mode selector from the loaded config so the panel reflects
+  // what the YAML requested.
+  const std::string& mode = msm_.configuredSaveMode();
+  for (int i = 0; i < IM_ARRAYSIZE(kSaveModes); ++i) {
+    if (mode == kSaveModes[i]) {
+      save_mode_idx_ = i;
+      break;
+    }
+  }
+}
 
 void ControlPanel::draw() {
   if (!visible_) return;
@@ -54,11 +65,13 @@ void ControlPanel::draw() {
   ImGui::SetNextItemWidth(180);
   if (ImGui::Combo("##save_mode", &save_mode_idx_, kSaveModes,
                    IM_ARRAYSIZE(kSaveModes))) {
-    msm_.setSaveModeAll(kSaveModes[save_mode_idx_], nlohmann::json::object());
+    msm_.setSaveModeAll(kSaveModes[save_mode_idx_],
+                        msm_.savingParamsFromConfig());
   }
   ImGui::SameLine();
   if (ImGui::Button("Apply")) {
-    msm_.setSaveModeAll(kSaveModes[save_mode_idx_], nlohmann::json::object());
+    msm_.setSaveModeAll(kSaveModes[save_mode_idx_],
+                        msm_.savingParamsFromConfig());
   }
 
   // ----- Per-camera streams -----

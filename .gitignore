@@ -72,3 +72,6 @@ vcpkg_installed/
 Testing/
 .cache/
 telefacet_e2e_out/
+
+# ImGui persisted window layout (runtime artifact)
+imgui.ini

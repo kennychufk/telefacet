@@ -74,16 +74,22 @@ inline constexpr std::size_t kChunkDataHeaderSize = sizeof(ChunkData);  // 16
 
 // JSON command names accepted by the server (cherupi-v4l2 types.hpp Protocol).
 namespace cmd {
-inline constexpr const char* kDiscover         = "discover";
-inline constexpr const char* kConfigure        = "configure";
-inline constexpr const char* kUnconfigure      = "unconfigure";
-inline constexpr const char* kSetSaveMode      = "set_save_mode";
-inline constexpr const char* kStartCameras     = "start_cameras";
-inline constexpr const char* kStartStream      = "start_stream";
-inline constexpr const char* kStopStream       = "stop_stream";
-inline constexpr const char* kStopCameras      = "stop_cameras";
-inline constexpr const char* kResetFrameCounts = "reset_frame_counts";
-inline constexpr const char* kSetHeaderOnly    = "set_header_only";
+inline constexpr const char* kDiscover               = "discover";
+inline constexpr const char* kGetState               = "get_state";
+inline constexpr const char* kConfigure              = "configure";
+inline constexpr const char* kUnconfigure            = "unconfigure";
+inline constexpr const char* kSetSaveMode            = "set_save_mode";
+inline constexpr const char* kStartCameras           = "start_cameras";
+inline constexpr const char* kStartStream            = "start_stream";
+inline constexpr const char* kStopStream             = "stop_stream";
+inline constexpr const char* kStopCameras            = "stop_cameras";
+inline constexpr const char* kResetFrameCounts       = "reset_frame_counts";
+inline constexpr const char* kSetHeaderOnly          = "set_header_only";
+inline constexpr const char* kSetLensPosition        = "set_lens_position";
+inline constexpr const char* kSetExposureTime        = "set_exposure_time";
+inline constexpr const char* kSetFrameDuration       = "set_frame_duration";
+inline constexpr const char* kGetFrameDurationLimits = "get_frame_duration_limits";
+inline constexpr const char* kGetLensPositionLimits  = "get_lens_position_limits";
 }  // namespace cmd
 
 }  // namespace telefacet::proto
