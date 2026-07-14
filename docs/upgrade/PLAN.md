@@ -103,9 +103,13 @@ When finishing a stage: (1) confirm "Done when" holds, (2) write `stage-<next>-*
 capturing what changed, what's verified, known gaps, and the exact next tasks,
 (3) update the "Status" line below, (4) commit only if the user asks.
 
-**Status:** Stage 1 (protocol v5 core) **code-complete and verified** — GUI +
-e2e binaries build clean; v5 wire parsing (multi-chunk + CornerBlock,
-header-only, NaN lens, legacy-message rejection) verified end-to-end through the
-real `ChunkReassembler` with synthetic frames. **Not yet smoke-tested against
-live Pi hardware** (no camera server on the dev box) — do that before Stage 2.
-Next: Stage 2 (`stage-2-commands-config.md`).
+**Status:** Stage 1 **done** (v5 wire core; confirmed rendering against a live
+v5 server). Stage 2 (commands / per-server config / cleanup) **code-complete**:
+all six new commands + connect-time `get_state` + `state`/limits response
+parsing added; per-server sensor/resolution config; `set_save_mode` now forwards
+YAML params; `checkerboard2x2` selectable; cropping removed everywhere; legacy
+dead code (`telefacet.cpp`, `include/`, `lib/`, `src/gl/Debayer.*`) deleted.
+GUI + e2e build clean; `ConfigLoader` unit tests pass; command JSON shapes +
+limits null-handling verified with synthetic checks. **Not yet smoke-tested
+against live Pi hardware** (focus/exposure/state round-trips) — do that before
+Stage 3. Next: Stage 3 (`stage-3-control-ux.md`).
