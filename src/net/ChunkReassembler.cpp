@@ -8,6 +8,51 @@
 
 namespace telefacet::net {
 
+namespace {
+
+// Parse the variable-size CornerBlock (protocol §5.4) that may follow the
+// ChunkHeader in the same WS message. `block` points at the first byte after
+// the header; `block_size` is ChunkHeader.corner_block_size. Bounds-checked
+// against a malformed/oversized set. Coordinates are full-frame Y-plane pixels.
+void parseCornerBlock(const std::uint8_t* block, std::size_t block_size,
+                      std::uint16_t expected_sets,
+                      std::vector<data::CornerSet>& out) {
+  out.clear();
+  if (block_size == 0 || expected_sets == 0) return;
+
+  std::size_t off = 0;
+  while (off + sizeof(proto::CornerSetHeader) <= block_size &&
+         out.size() < static_cast<std::size_t>(expected_sets)) {
+    proto::CornerSetHeader csh{};
+    std::memcpy(&csh, block + off, sizeof(csh));
+    off += sizeof(csh);
+    const std::uint16_t num_corners = csh.num_corners;
+    const std::size_t corner_bytes = static_cast<std::size_t>(num_corners) * 8;
+    if (off + corner_bytes > block_size) {
+      spdlog::error("corner block overrun: set {} claims {} corners, {} left",
+                    out.size(), num_corners, block_size - off);
+      return;
+    }
+    data::CornerSet set;
+    set.set_id = csh.set_id;
+    set.flags  = csh.flags;
+    set.corners.resize(num_corners);
+    for (std::uint16_t i = 0; i < num_corners; ++i) {
+      float xy[2];
+      std::memcpy(xy, block + off, sizeof(xy));
+      set.corners[i] = {xy[0], xy[1]};
+      off += sizeof(xy);
+    }
+    out.push_back(std::move(set));
+  }
+  if (out.size() != static_cast<std::size_t>(expected_sets)) {
+    spdlog::warn("parsed {} corner sets, expected {}", out.size(),
+                 expected_sets);
+  }
+}
+
+}  // namespace
+
 ChunkReassembler::ChunkReassembler(data::FrameBufferPool& pool,
                                    FrameCallback cb)
     : pool_(pool), cb_(std::move(cb)) {}
@@ -37,9 +82,9 @@ void ChunkReassembler::onBinary(const void* data, std::size_t len) {
 }
 
 void ChunkReassembler::handleStart(const std::uint8_t* data, std::size_t len) {
-  if (len != proto::kChunkStartTotalSize) {
-    spdlog::error("invalid chunk start size: {} (expected {})", len,
-                  proto::kChunkStartTotalSize);
+  if (len < proto::kChunkStartMinSize) {
+    spdlog::error("invalid chunk start size: {} (expected >= {})", len,
+                  proto::kChunkStartMinSize);
     return;
   }
   proto::ChunkStartMarker marker{};
@@ -52,46 +97,67 @@ void ChunkReassembler::handleStart(const std::uint8_t* data, std::size_t len) {
     return;
   }
 
-  // Header-only frame (set_header_only mode).
-  if (hdr.total_chunks == 0 && hdr.total_size == 0) {
+  // Copy packed fields to locals before referencing/passing.
+  const std::uint32_t frame_uuid        = hdr.frame_uuid;
+  const std::uint32_t frame_id          = hdr.frame_id;
+  const std::uint32_t camera_id         = hdr.camera_id;
+  const std::uint32_t width             = hdr.width;
+  const std::uint32_t height            = hdr.height;
+  const std::uint32_t bytes_per_line    = hdr.bytes_per_line;
+  const std::uint32_t pixel_format      = hdr.pixel_format;
+  const std::uint32_t frames_saved      = hdr.frames_saved;
+  const std::uint32_t total_chunks_v    = hdr.total_chunks;
+  const std::uint32_t total_size_v      = hdr.total_size;
+  const std::uint64_t timestamp_us      = hdr.timestamp_us;
+  const std::uint32_t frame_duration_us = hdr.frame_duration_us;
+  const std::uint32_t corner_block_size = hdr.corner_block_size;
+  const std::uint16_t num_corner_sets   = hdr.num_corner_sets;
+  const float         lens_position     = hdr.lens_position;
+  const std::uint8_t  af_state          = hdr.af_state;
+
+  // The start message carries the header plus an optional CornerBlock.
+  if (len != proto::kChunkStartMinSize + corner_block_size) {
+    spdlog::error("chunk start length mismatch: got {}, expected {}", len,
+                  proto::kChunkStartMinSize + corner_block_size);
+    return;
+  }
+  std::vector<data::CornerSet> corner_sets;
+  parseCornerBlock(data + proto::kChunkStartMinSize, corner_block_size,
+                   num_corner_sets, corner_sets);
+
+  // Populate the frame metadata shared by both delivery paths. Buffers come
+  // from a pool that does not clear fields, so every field is set explicitly.
+  auto fill = [&](data::FrameBuffer& b) {
+    b.frame_id          = frame_id;
+    b.camera_id         = camera_id;
+    b.width             = width;
+    b.height            = height;
+    b.bytes_per_line    = bytes_per_line;
+    b.pixel_format      = pixel_format;
+    b.frames_saved      = frames_saved;
+    b.timestamp_us      = timestamp_us;
+    b.frame_duration_us = frame_duration_us;
+    b.lens_position     = lens_position;
+    b.af_state          = af_state;
+    b.corner_sets       = corner_sets;
+  };
+
+  // Header-only frame (set_header_only mode): no CHNK packets follow.
+  if (total_chunks_v == 0 && total_size_v == 0) {
     auto buf = pool_.acquire(0);
-    buf->frame_id       = hdr.frame_id;
-    buf->camera_id      = hdr.camera_id;
-    buf->width          = hdr.width;
-    buf->height         = hdr.height;
-    buf->bytes_per_line = hdr.bytes_per_line;
-    buf->pixel_format   = hdr.pixel_format;
-    buf->frames_saved   = hdr.frames_saved;
-    buf->header_only    = true;
+    fill(*buf);
+    buf->header_only = true;
     if (cb_) cb_(std::move(buf));
     return;
   }
 
-  // Copy packed fields to locals before referencing/passing.
-  const std::uint32_t frame_uuid     = hdr.frame_uuid;
-  const std::uint32_t frame_id       = hdr.frame_id;
-  const std::uint32_t camera_id      = hdr.camera_id;
-  const std::uint32_t width          = hdr.width;
-  const std::uint32_t height         = hdr.height;
-  const std::uint32_t bytes_per_line = hdr.bytes_per_line;
-  const std::uint32_t pixel_format   = hdr.pixel_format;
-  const std::uint32_t frames_saved   = hdr.frames_saved;
-  const std::uint32_t total_chunks_v = hdr.total_chunks;
-  const std::uint32_t total_size_v   = hdr.total_size;
-
   // Multi-chunk frame: hold metadata + per-chunk staging until completion.
   InFlight inf;
   inf.buf = pool_.acquire(0);
-  inf.buf->frame_id       = frame_id;
-  inf.buf->camera_id      = camera_id;
-  inf.buf->width          = width;
-  inf.buf->height         = height;
-  inf.buf->bytes_per_line = bytes_per_line;
-  inf.buf->pixel_format   = pixel_format;
-  inf.buf->frames_saved   = frames_saved;
-  inf.buf->header_only    = false;
-  inf.total_chunks        = total_chunks_v;
-  inf.total_size          = total_size_v;
+  fill(*inf.buf);
+  inf.buf->header_only = false;
+  inf.total_chunks     = total_chunks_v;
+  inf.total_size       = total_size_v;
   inf.chunks.resize(total_chunks_v);
   in_flight_.emplace(frame_uuid, std::move(inf));
 }

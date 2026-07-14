@@ -1,4 +1,4 @@
-# Example telefacet configuration (protocol v2).
+# Example telefacet configuration (protocol v5).
 
 servers:
   - address: ws://localhost:9001

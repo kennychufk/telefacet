@@ -1,8 +1,9 @@
 # telefacet
 
 Native C++ / OpenGL replacement for the `telefacet-web` Vue client. Connects
-to one or more `cherupi-v4l2` WebSocket servers, debayers raw 10-bit SRGGB
-frames on the GPU, and renders them in a dockable multi-camera view.
+to one or more `cherupi-v4l2` WebSocket servers (WebSocket protocol v5),
+converts the YUV420 frames delivered by the server's hardware ISP to RGB on
+the GPU, and renders them in a dockable multi-camera view.
 
 ## Build (Linux)
 
