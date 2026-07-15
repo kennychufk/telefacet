@@ -62,6 +62,7 @@ class ControlPanel {
 
   nlohmann::json buildSaveParams() const;
   bool checkerboardMode() const;
+  bool arucoMode() const;
 
   data::CameraStore&        store_;
   net::MultiServerManager&  msm_;
@@ -78,6 +79,9 @@ class ControlPanel {
   int  cb_cols_             = 11;
   bool cb_full_res_         = false;
   int  cb_threads_          = 4;
+  bool aruco_full_res_      = false;
+  int  aruco_threads_       = 4;
+  bool aruco_corner_refine_ = false;
 
   // Focus control state. focus_manual_ false ⇒ continuous AF (sends -1).
   bool  focus_manual_ = false;

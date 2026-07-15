@@ -85,6 +85,7 @@ void CameraView::uploadIfNew() {
   lens_position_     = frame->lens_position;
   af_state_          = frame->af_state;
   corner_sets_       = frame->corner_sets;
+  aruco_markers_     = frame->aruco_markers;
 
   if (frame->header_only) {
     store_.pool().release(std::move(frame));
@@ -243,6 +244,32 @@ bool CameraView::drawWindow(float x, float y, float w, float h) {
           prev = p;
           have_prev = true;
         }
+      }
+
+      // ArUco marker overlay. Same coordinate mapping as the checkerboard path
+      // (full-frame Y-plane pixels). Amber, distinct from the checkerboard
+      // green: closed quad outline + corner dots + centered id label.
+      const ImU32 amber = IM_COL32(255, 160, 0, 255);
+      for (const auto& m : aruco_markers_) {
+        if (!(m.flags & 0x01)) continue;  // only full-frame coords are mappable
+        if (m.corners.size() < 4) continue;
+        ImVec2 pts[4];
+        ImVec2 centroid(0.0f, 0.0f);
+        for (int i = 0; i < 4; ++i) {
+          pts[i] = ImVec2(img_origin.x + m.corners[i][0] * sx,
+                          img_origin.y + m.corners[i][1] * sy);
+          centroid.x += pts[i].x * 0.25f;
+          centroid.y += pts[i].y * 0.25f;
+        }
+        dl->AddPolyline(pts, 4, amber, ImDrawFlags_Closed, 1.5f);
+        for (int i = 0; i < 4; ++i) dl->AddCircleFilled(pts[i], 3.0f, amber);
+        char mbuf[32];
+        std::snprintf(mbuf, sizeof(mbuf), "#%d", m.marker_id);
+        // Center the label on the centroid, with a dark shadow for legibility.
+        const ImVec2 tsz = ImGui::CalcTextSize(mbuf);
+        const ImVec2 tpos(centroid.x - tsz.x * 0.5f, centroid.y - tsz.y * 0.5f);
+        dl->AddText(ImVec2(tpos.x + 1, tpos.y + 1), IM_COL32(0, 0, 0, 200), mbuf);
+        dl->AddText(tpos, amber, mbuf);
       }
     }
 

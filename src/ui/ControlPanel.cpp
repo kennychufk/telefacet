@@ -12,7 +12,7 @@ namespace telefacet::ui {
 namespace {
 
 const char* kSaveModes[] = {"none", "buffer", "batch", "checkerboard",
-                            "checkerboard2x2"};
+                            "checkerboard2x2", "aruco", "aruco2x2"};
 
 // Palette (mirrors the web client's --live / --accent / muted tones).
 const ImVec4 kGreen  = ImVec4(0.35f, 0.92f, 0.55f, 1.0f);
@@ -57,11 +57,19 @@ ControlPanel::ControlPanel(data::CameraStore& store,
   cb_cols_        = s.checkerboard_cols;
   cb_full_res_    = s.checkerboard_full_res_detection;
   cb_threads_     = s.checkerboard_num_threads;
+  aruco_full_res_      = s.aruco_full_res_detection;
+  aruco_threads_       = s.aruco_num_threads;
+  aruco_corner_refine_ = s.aruco_corner_refine;
 }
 
 bool ControlPanel::checkerboardMode() const {
   const std::string m = kSaveModes[save_mode_idx_];
   return m == "checkerboard" || m == "checkerboard2x2";
+}
+
+bool ControlPanel::arucoMode() const {
+  const std::string m = kSaveModes[save_mode_idx_];
+  return m == "aruco" || m == "aruco2x2";
 }
 
 ControlPanel::Agg ControlPanel::computeAgg() const {
@@ -274,7 +282,7 @@ void ControlPanel::drawCameras(const Agg& agg,
     return;
   }
   const bool running = (agg.stage == Stage::Running);
-  const bool cb = checkerboardMode();
+  const bool cb = checkerboardMode() || arucoMode();
   for (const auto& info : roster) {
     auto* live = store_.stats(info.global_id);
     const float fps  = live ? live->fps.load() : 0.0f;
@@ -478,12 +486,24 @@ void ControlPanel::drawSaveMode() {
     ImGui::InputInt("detect threads", &cb_threads_);
   }
 
+  if (arucoMode()) {
+    ImGui::SeparatorText("ArUco params");
+    ImGui::Checkbox("full-res detection", &aruco_full_res_);
+    ImGui::Checkbox("corner refine (subpix)", &aruco_corner_refine_);
+    // num_threads applies to aruco2x2 quadrant parallelism only.
+    ImGui::BeginDisabled(std::string(kSaveModes[save_mode_idx_]) != "aruco2x2");
+    ImGui::SetNextItemWidth(120);
+    ImGui::InputInt("detect threads", &aruco_threads_);
+    ImGui::EndDisabled();
+  }
+
   if (ImGui::Button("Apply save mode")) {
     batch_size_     = std::max(1, batch_size_);
     writer_threads_ = std::max(1, writer_threads_);
     cb_rows_        = std::max(1, cb_rows_);
     cb_cols_        = std::max(1, cb_cols_);
     cb_threads_     = std::max(1, cb_threads_);
+    aruco_threads_  = std::clamp(aruco_threads_, 1, 4);
     msm_.setSaveModeAll(kSaveModes[save_mode_idx_], buildSaveParams());
   }
 }
@@ -500,6 +520,11 @@ nlohmann::json ControlPanel::buildSaveParams() const {
     p["checkerboard_cols"] = cb_cols_;
     p["checkerboard_full_res_detection"] = cb_full_res_;
     p["checkerboard_num_threads"] = cb_threads_;
+  }
+  if (arucoMode()) {
+    p["aruco_full_res_detection"] = aruco_full_res_;
+    p["aruco_num_threads"] = aruco_threads_;
+    p["aruco_corner_refine"] = aruco_corner_refine_;
   }
   return p;
 }

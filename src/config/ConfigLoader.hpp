@@ -22,7 +22,8 @@ struct ServerCfg {
 };
 
 struct FrameSavingCfg {
-  std::string mode = "none";  // none|buffer|batch|checkerboard|checkerboard2x2
+  // none|buffer|batch|checkerboard|checkerboard2x2|aruco|aruco2x2
+  std::string mode = "none";
   std::string output_dir = "camera_frames";
   bool   prepend_timestamp_to_dir = false;
   std::size_t batch_size      = 10;
@@ -32,6 +33,10 @@ struct FrameSavingCfg {
   int  checkerboard_cols = 11;
   bool checkerboard_full_res_detection = false;
   int  checkerboard_num_threads = 4;
+  // aruco / aruco2x2 fields
+  bool aruco_full_res_detection = false;
+  int  aruco_num_threads = 4;
+  bool aruco_corner_refine = false;
 };
 
 struct Config {

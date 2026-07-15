@@ -60,7 +60,8 @@ Config loadFromFile(const std::string& path) {
     const auto& f = root["frame_saving"];
     if (f["mode"]) cfg.saving.mode = f["mode"].as<std::string>();
     static const std::vector<std::string> valid = {
-        "none", "buffer", "batch", "checkerboard", "checkerboard2x2"};
+        "none", "buffer", "batch", "checkerboard", "checkerboard2x2",
+        "aruco", "aruco2x2"};
     if (std::find(valid.begin(), valid.end(), cfg.saving.mode) ==
         valid.end()) {
       throw std::runtime_error("frame_saving.mode invalid: " + cfg.saving.mode);
@@ -82,6 +83,15 @@ Config loadFromFile(const std::string& path) {
       if (f["checkerboard_num_threads"])
         cfg.saving.checkerboard_num_threads =
             f["checkerboard_num_threads"].as<int>();
+    }
+    if (cfg.saving.mode == "aruco" || cfg.saving.mode == "aruco2x2") {
+      if (f["aruco_full_res_detection"])
+        cfg.saving.aruco_full_res_detection =
+            f["aruco_full_res_detection"].as<bool>();
+      if (f["aruco_num_threads"])
+        cfg.saving.aruco_num_threads = f["aruco_num_threads"].as<int>();
+      if (f["aruco_corner_refine"])
+        cfg.saving.aruco_corner_refine = f["aruco_corner_refine"].as<bool>();
     }
   }
 

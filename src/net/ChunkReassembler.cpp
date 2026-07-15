@@ -51,6 +51,48 @@ void parseCornerBlock(const std::uint8_t* block, std::size_t block_size,
   }
 }
 
+// Parse the variable-size detection block (protocol §5.4.2) when
+// detection_kind == Aruco. Sibling of parseCornerBlock: same block bytes and
+// bounds-checking, but each record is a MarkerSetHeader (marker id + quadrant)
+// followed by num_corners × {float x, float y}. Coordinates are full-frame
+// Y-plane pixels, identical to the checkerboard path.
+void parseMarkerBlock(const std::uint8_t* block, std::size_t block_size,
+                      std::uint16_t expected_sets,
+                      std::vector<data::ArucoMarker>& out) {
+  out.clear();
+  if (block_size == 0 || expected_sets == 0) return;
+
+  std::size_t off = 0;
+  while (off + sizeof(proto::MarkerSetHeader) <= block_size &&
+         out.size() < static_cast<std::size_t>(expected_sets)) {
+    proto::MarkerSetHeader msh{};
+    std::memcpy(&msh, block + off, sizeof(msh));
+    off += sizeof(msh);
+    const std::uint16_t num_corners = msh.num_corners;
+    const std::size_t corner_bytes = static_cast<std::size_t>(num_corners) * 8;
+    if (off + corner_bytes > block_size) {
+      spdlog::error("marker block overrun: marker {} claims {} corners, {} left",
+                    out.size(), num_corners, block_size - off);
+      return;
+    }
+    data::ArucoMarker marker;
+    marker.marker_id = msh.marker_id;
+    marker.quadrant  = msh.quadrant;
+    marker.flags     = msh.flags;
+    marker.corners.resize(num_corners);
+    for (std::uint16_t i = 0; i < num_corners; ++i) {
+      float xy[2];
+      std::memcpy(xy, block + off, sizeof(xy));
+      marker.corners[i] = {xy[0], xy[1]};
+      off += sizeof(xy);
+    }
+    out.push_back(std::move(marker));
+  }
+  if (out.size() != static_cast<std::size_t>(expected_sets)) {
+    spdlog::warn("parsed {} markers, expected {}", out.size(), expected_sets);
+  }
+}
+
 }  // namespace
 
 ChunkReassembler::ChunkReassembler(data::FrameBufferPool& pool,
@@ -114,16 +156,31 @@ void ChunkReassembler::handleStart(const std::uint8_t* data, std::size_t len) {
   const std::uint16_t num_corner_sets   = hdr.num_corner_sets;
   const float         lens_position     = hdr.lens_position;
   const std::uint8_t  af_state          = hdr.af_state;
+  const std::uint8_t  detection_kind    = hdr.detection_kind;
 
-  // The start message carries the header plus an optional CornerBlock.
+  // The start message carries the header plus an optional detection block. Its
+  // byte size is corner_block_size regardless of detection_kind, so the length
+  // invariant is unchanged from the checkerboard-only path.
   if (len != proto::kChunkStartMinSize + corner_block_size) {
     spdlog::error("chunk start length mismatch: got {}, expected {}", len,
                   proto::kChunkStartMinSize + corner_block_size);
     return;
   }
+  // Branch on detection_kind: checkerboard fills corner_sets, aruco fills
+  // aruco_markers. Whichever detector didn't run leaves its vector empty.
   std::vector<data::CornerSet> corner_sets;
-  parseCornerBlock(data + proto::kChunkStartMinSize, corner_block_size,
-                   num_corner_sets, corner_sets);
+  std::vector<data::ArucoMarker> aruco_markers;
+  const auto* block = data + proto::kChunkStartMinSize;
+  switch (static_cast<proto::DetectionKind>(detection_kind)) {
+    case proto::DetectionKind::Checkerboard:
+      parseCornerBlock(block, corner_block_size, num_corner_sets, corner_sets);
+      break;
+    case proto::DetectionKind::Aruco:
+      parseMarkerBlock(block, corner_block_size, num_corner_sets, aruco_markers);
+      break;
+    case proto::DetectionKind::None:
+      break;  // no block
+  }
 
   // Populate the frame metadata shared by both delivery paths. Buffers come
   // from a pool that does not clear fields, so every field is set explicitly.
@@ -140,6 +197,7 @@ void ChunkReassembler::handleStart(const std::uint8_t* data, std::size_t len) {
     b.lens_position     = lens_position;
     b.af_state          = af_state;
     b.corner_sets       = corner_sets;
+    b.aruco_markers     = aruco_markers;
   };
 
   // Header-only frame (set_header_only mode): no CHNK packets follow.

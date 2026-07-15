@@ -73,6 +73,7 @@ class CameraView {
   float         lens_position_     = NAN;
   std::uint8_t  af_state_          = 0xFF;
   std::vector<data::CornerSet> corner_sets_;
+  std::vector<data::ArucoMarker> aruco_markers_;
 };
 
 }  // namespace telefacet::ui

@@ -21,6 +21,16 @@ struct CornerSet {
   std::vector<std::array<float, 2>> corners;  // {x, y} per inner corner
 };
 
+// One detected ArUco/AprilTag marker (protocol v6, `aruco` / `aruco2x2` modes).
+// Coordinates are in full-frame Y-plane pixel space, like CornerSet, so they
+// overlay directly on the frame.
+struct ArucoMarker {
+  std::int32_t marker_id = 0;  // DICT_APRILTAG_16h5 id (0..29)
+  std::uint8_t quadrant  = 0;  // 0 for `aruco`; row*2+col (0..3) for `aruco2x2`
+  std::uint8_t flags     = 0;  // bit 0 ⇒ full-frame Y-plane coords
+  std::vector<std::array<float, 2>> corners;  // 4 corners, clockwise from TL
+};
+
 struct FrameBuffer {
   std::vector<std::uint8_t> data;  // packed bytes
   std::uint32_t frame_id          = 0;
@@ -38,6 +48,8 @@ struct FrameBuffer {
   std::uint8_t  af_state          = 0xFF;  // libcamera AfState; 0xFF if none
   // v4 checkerboard corners (empty unless a checkerboard save mode found a board).
   std::vector<CornerSet> corner_sets;
+  // v6 ArUco markers (empty unless an aruco save mode detected a marker).
+  std::vector<ArucoMarker> aruco_markers;
   bool          header_only       = false;
 };
 

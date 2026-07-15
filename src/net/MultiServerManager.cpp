@@ -127,6 +127,11 @@ nlohmann::json MultiServerManager::savingParamsFromConfig() const {
     p["checkerboard_full_res_detection"] = s.checkerboard_full_res_detection;
     p["checkerboard_num_threads"] = s.checkerboard_num_threads;
   }
+  if (s.mode == "aruco" || s.mode == "aruco2x2") {
+    p["aruco_full_res_detection"] = s.aruco_full_res_detection;
+    p["aruco_num_threads"] = s.aruco_num_threads;
+    p["aruco_corner_refine"] = s.aruco_corner_refine;
+  }
   return p;
 }
 
