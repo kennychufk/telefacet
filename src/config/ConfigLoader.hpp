@@ -1,7 +1,7 @@
 #pragma once
 
 // Mirrors telefacet-web/src/services/ConfigLoader.js. Loads a YAML file with
-// servers, camera_config, and frame_saving.
+// servers, camera_config, and processing (formerly frame_saving).
 
 #include <cstdint>
 #include <optional>
@@ -24,6 +24,9 @@ struct ServerCfg {
 struct FrameSavingCfg {
   // none|buffer|batch|checkerboard|checkerboard2x2|aruco|aruco2x2
   std::string mode = "none";
+  // When false, detector modes still run and stream their side-products but no
+  // frames are written to disk (server-side ProcessConfig::save_frames).
+  bool save_frames = true;
   std::string output_dir = "camera_frames";
   bool   prepend_timestamp_to_dir = false;
   std::size_t batch_size      = 10;

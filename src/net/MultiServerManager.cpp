@@ -116,6 +116,7 @@ bool MultiServerManager::getLensPositionLimits() {
 nlohmann::json MultiServerManager::savingParamsFromConfig() const {
   const auto& s = cfg_.saving;
   nlohmann::json p = {
+      {"save_frames", s.save_frames},
       {"output_dir", s.output_dir},
       {"prepend_timestamp_to_dir", s.prepend_timestamp_to_dir},
       {"batch_size", s.batch_size},

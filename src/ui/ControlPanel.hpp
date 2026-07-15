@@ -71,6 +71,7 @@ class ControlPanel {
   int                       save_mode_idx_ = 0;
 
   // Live-editable save params (seeded from config in the ctor).
+  bool save_frames_         = true;
   char output_dir_[256]     = {};
   bool prepend_ts_          = false;
   int  batch_size_          = 10;

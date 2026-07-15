@@ -21,6 +21,9 @@ TEST(ConfigLoader, LoadsExampleYaml) {
   EXPECT_EQ(*cfg.servers[0].height, 1088u);
 
   EXPECT_EQ(cfg.saving.mode, "none");
+  // The fixture's `processing` section sets save_frames: false (non-default),
+  // so this also proves the renamed section + new field are parsed.
+  EXPECT_FALSE(cfg.saving.save_frames);
 }
 
 TEST(ConfigLoader, ThrowsOnMissingFile) {

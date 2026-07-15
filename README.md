@@ -3,7 +3,7 @@
 Native C++ / OpenGL replacement for the `telefacet-web` Vue client. Connects
 to one or more `cherupi-v4l2` WebSocket servers (WebSocket protocol v6),
 converts the YUV420 frames delivered by the server's hardware ISP to RGB on
-the GPU, and renders them in a dockable multi-camera view. Detector save modes
+the GPU, and renders them in a dockable multi-camera view. Detector process modes
 (`checkerboard` / `checkerboard2x2` / `aruco` / `aruco2x2`) overlay their
 per-frame detections on each camera view — checkerboard corners in green,
 ArUco/AprilTag markers as amber quads with corner dots and id labels.

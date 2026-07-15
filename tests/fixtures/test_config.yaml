@@ -7,8 +7,11 @@ servers:
     width: 1456
     height: 1088
 
-frame_saving:
+processing:
   mode: none
+  # Set false (non-default) so the loader test proves the `processing` section
+  # and the new save_frames field are actually parsed.
+  save_frames: false
   output_dir: camera_frames
   prepend_timestamp_to_dir: false
   batch_size: 10

@@ -55,17 +55,18 @@ Config loadFromFile(const std::string& path) {
     cfg.servers.push_back(std::move(sc));
   }
 
-  // ---- frame_saving (optional, with defaults) ----
-  if (root["frame_saving"]) {
-    const auto& f = root["frame_saving"];
+  // ---- processing (optional, with defaults; formerly `frame_saving`) ----
+  if (root["processing"]) {
+    const auto& f = root["processing"];
     if (f["mode"]) cfg.saving.mode = f["mode"].as<std::string>();
     static const std::vector<std::string> valid = {
         "none", "buffer", "batch", "checkerboard", "checkerboard2x2",
         "aruco", "aruco2x2"};
     if (std::find(valid.begin(), valid.end(), cfg.saving.mode) ==
         valid.end()) {
-      throw std::runtime_error("frame_saving.mode invalid: " + cfg.saving.mode);
+      throw std::runtime_error("processing.mode invalid: " + cfg.saving.mode);
     }
+    if (f["save_frames"]) cfg.saving.save_frames = f["save_frames"].as<bool>();
     if (f["output_dir"]) cfg.saving.output_dir = f["output_dir"].as<std::string>();
     if (f["prepend_timestamp_to_dir"])
       cfg.saving.prepend_timestamp_to_dir = f["prepend_timestamp_to_dir"].as<bool>();

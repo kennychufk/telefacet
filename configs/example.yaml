@@ -13,8 +13,9 @@ servers:
   #   width: 2304
   #   height: 1296
 
-frame_saving:
-  mode: none                  # none | buffer | batch | checkerboard | checkerboard2x2
+processing:                   # (formerly `frame_saving`)
+  mode: none                  # none | buffer | batch | checkerboard | checkerboard2x2 | aruco | aruco2x2
+  save_frames: true           # false ⇒ detector still runs + streams corners/markers, but no frames written to disk
   output_dir: camera_frames
   prepend_timestamp_to_dir: false
   batch_size: 10

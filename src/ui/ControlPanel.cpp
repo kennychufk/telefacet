@@ -49,6 +49,7 @@ ControlPanel::ControlPanel(data::CameraStore& store,
   for (int i = 0; i < IM_ARRAYSIZE(kSaveModes); ++i) {
     if (s.mode == kSaveModes[i]) { save_mode_idx_ = i; break; }
   }
+  save_frames_    = s.save_frames;
   std::strncpy(output_dir_, s.output_dir.c_str(), sizeof(output_dir_) - 1);
   prepend_ts_     = s.prepend_timestamp_to_dir;
   batch_size_     = static_cast<int>(s.batch_size);
@@ -467,6 +468,11 @@ void ControlPanel::drawSaveMode() {
   ImGui::Combo("##save_mode", &save_mode_idx_, kSaveModes,
                IM_ARRAYSIZE(kSaveModes));
 
+  // Decouples detection from disk writing: when off, detector modes still run
+  // and stream corners/markers but write nothing.
+  ImGui::Checkbox("save frames to disk", &save_frames_);
+
+  ImGui::BeginDisabled(!save_frames_);
   ImGui::SetNextItemWidth(220);
   ImGui::InputText("output_dir", output_dir_, sizeof(output_dir_));
   ImGui::Checkbox("prepend timestamp to dir", &prepend_ts_);
@@ -474,6 +480,7 @@ void ControlPanel::drawSaveMode() {
   ImGui::InputInt("batch_size", &batch_size_);
   ImGui::SetNextItemWidth(120);
   ImGui::InputInt("writer_threads", &writer_threads_);
+  ImGui::EndDisabled();
 
   if (checkerboardMode()) {
     ImGui::SeparatorText("Checkerboard params");
@@ -510,6 +517,7 @@ void ControlPanel::drawSaveMode() {
 
 nlohmann::json ControlPanel::buildSaveParams() const {
   nlohmann::json p = {
+      {"save_frames", save_frames_},
       {"output_dir", std::string(output_dir_)},
       {"prepend_timestamp_to_dir", prepend_ts_},
       {"batch_size", batch_size_},

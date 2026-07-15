@@ -42,11 +42,11 @@ class MultiServerManager {
   bool getFrameDurationLimits();
   bool getLensPositionLimits();
 
-  // set_save_mode params built from the loaded frame_saving config, and the
+  // set_process_mode params built from the loaded `processing` config, and the
   // configured mode string (used to seed the control panel).
   nlohmann::json savingParamsFromConfig() const;
   const std::string& configuredSaveMode() const { return cfg_.saving.mode; }
-  // The loaded frame_saving config, used to seed the (now live-editable)
+  // The loaded `processing` config, used to seed the (now live-editable)
   // save-mode controls in the UI.
   const config::FrameSavingCfg& savingConfig() const { return cfg_.saving; }
 
