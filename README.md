@@ -35,6 +35,9 @@ streams. Press **P** to hide/show the control panel.
 * `src/net/` — WebSocket client, chunked-frame reassembly, multi-server roster
 * `src/data/` — `FrameBufferPool` (recycled byte buffers) and `CameraStore`
   (latest-frame-per-camera, atomic publish/consume)
+* `src/client/` — `Client`, the GUI-free API for consuming streams from another
+  app (drives the lifecycle into `aruco2x2`, hands out latest per-camera marker
+  detections). See `docs/client-api.md`. Part of `telefacet_core`.
 * `src/gl/` — `Shader` helper and the `Debayer` GL pass (port of
   `telefacet-web/src/webgl/Debayer.js`)
 * `src/ui/` — `CameraView` (per-camera ImGui window), `CameraGrid`
