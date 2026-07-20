@@ -15,7 +15,7 @@ Given a loaded `config::Config` (just the `servers:` list is required), one
 call runs the whole bring-up and blocks until every server is streaming:
 
 ```
-connectAll → wait for discovery → configureAll → set aruco2x2
+connectAll → wait for discovery → configureAll → lens/exposure → set save_mode
            → (header-only, no disk saving) → startAllCameras → startStream(all)
 ```
 
@@ -23,11 +23,24 @@ connectAll → wait for discovery → configureAll → set aruco2x2
 
 | option | default | why |
 |---|---|---|
+| `save_mode` | `"aruco2x2"` | server-side processing mode; any mode from protocol §4.5 |
 | `aruco_corner_refine` | `true` | subpixel corners → better PnP |
 | `save_frames` | `false` | don't fill the Pi's disk |
 | `header_only` | `true` | stream only the header + corner block, **not** the pixels — a large bandwidth saving; the detection block rides every frame regardless |
 | `lens_position` | unset | set it to the diopter your intrinsics were calibrated at for a locked focus |
 
+Lens/exposure are applied *after* configure — the server rejects those controls
+while the cameras are still IDLE.
+
+### Streaming raw frames instead of detections
+
+Set `save_mode = "none"` and `header_only = false` to stream whole YUV420 frames.
+`poll()`/`latest()` only copy out marker data, so raw pixels come off the store
+directly — `client.store().consumeIfNew(global_id, cursor)` hands back the
+`FrameBuffer` with `.data`.
+
+Note that `"none"` is the only ungated mode: detector modes stream only the
+frames the on-device detector finished, so they drop frames under load by design.
 ## Consuming detections
 
 The pull API is latest-wins and non-blocking, matching the live-viewer

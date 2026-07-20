@@ -113,8 +113,10 @@ bool MultiServerManager::getLensPositionLimits() {
   return false;
 }
 
-nlohmann::json MultiServerManager::savingParamsFromConfig() const {
+nlohmann::json MultiServerManager::savingParamsFromConfig(
+    const std::string& mode) const {
   const auto& s = cfg_.saving;
+  const std::string& m = mode.empty() ? s.mode : mode;
   nlohmann::json p = {
       {"save_frames", s.save_frames},
       {"output_dir", s.output_dir},
@@ -122,13 +124,13 @@ nlohmann::json MultiServerManager::savingParamsFromConfig() const {
       {"batch_size", s.batch_size},
       {"writer_threads", s.writer_threads},
   };
-  if (s.mode == "checkerboard" || s.mode == "checkerboard2x2") {
+  if (m == "checkerboard" || m == "checkerboard2x2") {
     p["checkerboard_rows"] = s.checkerboard_rows;
     p["checkerboard_cols"] = s.checkerboard_cols;
     p["checkerboard_full_res_detection"] = s.checkerboard_full_res_detection;
     p["checkerboard_num_threads"] = s.checkerboard_num_threads;
   }
-  if (s.mode == "aruco" || s.mode == "aruco2x2") {
+  if (m == "aruco" || m == "aruco2x2") {
     p["aruco_full_res_detection"] = s.aruco_full_res_detection;
     p["aruco_num_threads"] = s.aruco_num_threads;
     p["aruco_corner_refine"] = s.aruco_corner_refine;

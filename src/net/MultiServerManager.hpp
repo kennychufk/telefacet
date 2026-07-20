@@ -43,8 +43,10 @@ class MultiServerManager {
   bool getLensPositionLimits();
 
   // set_process_mode params built from the loaded `processing` config, and the
-  // configured mode string (used to seed the control panel).
-  nlohmann::json savingParamsFromConfig() const;
+  // configured mode string (used to seed the control panel). `mode` selects
+  // which mode-specific keys are included; empty ⇒ configuredSaveMode(). Pass
+  // it explicitly when issuing a mode that differs from the config's.
+  nlohmann::json savingParamsFromConfig(const std::string& mode = {}) const;
   const std::string& configuredSaveMode() const { return cfg_.saving.mode; }
   // The loaded `processing` config, used to seed the (now live-editable)
   // save-mode controls in the UI.

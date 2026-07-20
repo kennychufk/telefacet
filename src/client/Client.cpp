@@ -48,11 +48,7 @@ void Client::start(const ClientOptions& opts) {
   spdlog::info("telefacet::client: discovered {} camera(s)",
                store_.snapshot().size());
 
-  // 3) Optional manual focus / exposure before we start capturing.
-  if (opts.lens_position) msm_->setLensPositionAll(*opts.lens_position);
-  if (opts.exposure_time_us) msm_->setExposureTimeAll(*opts.exposure_time_us);
-
-  // 4) Configure cameras (width/height come from the per-server config).
+  // 3) Configure cameras (width/height come from the per-server config).
   msm_->configureAll();
   msm_->getStateAll();
   if (!waitUntil([&] {
@@ -66,16 +62,29 @@ void Client::start(const ClientOptions& opts) {
       }, opts.start_timeout))
     throw std::runtime_error("telefacet::client: servers did not reach 'configured'");
 
-  // 5) Switch to aruco2x2 and stop persisting frames to disk. The corner block
-  //    still rides every frame regardless of save_frames / header_only.
-  nlohmann::json params = {
-      {"save_frames", opts.save_frames},
-      {"aruco_full_res_detection", opts.aruco_full_res_detection},
-      {"aruco_num_threads", opts.aruco_num_threads},
-      {"aruco_corner_refine", opts.aruco_corner_refine},
-  };
-  msm_->setSaveModeAll("aruco2x2", params);
-  if (opts.header_only) msm_->setHeaderOnlyAll(true);
+  // 4) Optional manual focus / exposure. These must come *after* configure —
+  //    the server rejects set_lens_position / set_exposure_time unless it is
+  //    CONFIGURED or RUNNING (websocket_server.cpp:503,529), and the rejection
+  //    is an async `error` reply we'd never notice.
+  if (opts.lens_position) msm_->setLensPositionAll(*opts.lens_position);
+  if (opts.exposure_time_us) msm_->setExposureTimeAll(*opts.exposure_time_us);
+
+  // 5) Switch to the requested mode and stop persisting frames to disk. For the
+  //    detector modes the corner block still rides every frame regardless of
+  //    save_frames / header_only. Start from the config's `processing` params
+  //    (output_dir/batch_size/... — mode-gated on the mode we're about to
+  //    issue, not the config's), then let ClientOptions' explicit values win.
+  nlohmann::json params = msm_->savingParamsFromConfig(opts.save_mode);
+  params["save_frames"] = opts.save_frames;
+  if (opts.save_mode == "aruco" || opts.save_mode == "aruco2x2") {
+    params["aruco_full_res_detection"] = opts.aruco_full_res_detection;
+    params["aruco_num_threads"]        = opts.aruco_num_threads;
+    params["aruco_corner_refine"]      = opts.aruco_corner_refine;
+  }
+  msm_->setSaveModeAll(opts.save_mode, params);
+  // Always issue the toggle rather than leaning on the server's `false` default,
+  // so a caller can force pixels back on for a connection that had it turned on.
+  msm_->setHeaderOnlyAll(opts.header_only);
 
   // 6) Start capture, then open every camera's stream.
   msm_->startAllCameras();
@@ -92,7 +101,8 @@ void Client::start(const ClientOptions& opts) {
   for (const auto& info : store_.snapshot()) msm_->startStream(info.global_id);
 
   started_ = true;
-  spdlog::info("telefacet::client: streaming aruco2x2 on {} camera(s)",
+  spdlog::info("telefacet::client: streaming {} ({}) on {} camera(s)",
+               opts.save_mode, opts.header_only ? "header-only" : "full frames",
                store_.snapshot().size());
 }
 

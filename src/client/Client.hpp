@@ -6,10 +6,14 @@
 // The GUI app (src/app/App.cpp) wires MultiServerManager + CameraStore + the
 // ImGui ControlPanel together by hand. `Client` is the same wiring minus the
 // UI: it drives one or more cherupi-v4l2 servers through the full lifecycle
-// (connect → discover → configure → set aruco2x2 → start cameras → start
+// (connect → discover → configure → set process mode → start cameras → start
 // streams) and then hands out the latest per-camera AprilTag/ArUco corner
 // detections through a small, thread-safe pull API suitable for a real-time
 // control loop.
+//
+// The defaults target pose estimation (aruco2x2 + header-only). Callers wanting
+// raw pixels — e.g. tools/stream_benchmark.cpp — set ClientOptions::save_mode
+// to "none" and header_only to false, then pull whole frames off store().
 //
 // Nothing here depends on GLFW / OpenGL / ImGui — it links only against
 // telefacet_core.
@@ -52,6 +56,12 @@ struct CameraMarkers {
 // subpixel corners on, no on-disk frame saving, header-only transport (we only
 // need the corner block, not the pixels — a large bandwidth saving).
 struct ClientOptions {
+  // Server-side processing mode (protocol §4.5): none|buffer|batch|
+  // checkerboard|checkerboard2x2|aruco|aruco2x2. The aruco_* fields below apply
+  // only to the aruco modes. Use "none" with header_only=false to stream raw
+  // full frames (every captured frame — "none" has no detector to gate on).
+  std::string save_mode = "aruco2x2";
+
   // aruco2x2 detector params (server-side ProcessConfig).
   bool aruco_full_res_detection = false;  // detect on full-res vs 2x-subsampled
   int  aruco_num_threads        = 4;      // quadrant parallelism (1..4)
