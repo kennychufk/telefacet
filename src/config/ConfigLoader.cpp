@@ -60,7 +60,7 @@ Config loadFromFile(const std::string& path) {
     const auto& f = root["processing"];
     if (f["mode"]) cfg.saving.mode = f["mode"].as<std::string>();
     static const std::vector<std::string> valid = {
-        "none", "buffer", "batch", "checkerboard", "checkerboard2x2",
+        "none", "buffer", "batch", "trigger", "checkerboard", "checkerboard2x2",
         "aruco", "aruco2x2"};
     if (std::find(valid.begin(), valid.end(), cfg.saving.mode) ==
         valid.end()) {
@@ -84,6 +84,10 @@ Config loadFromFile(const std::string& path) {
       if (f["checkerboard_num_threads"])
         cfg.saving.checkerboard_num_threads =
             f["checkerboard_num_threads"].as<int>();
+    }
+    if (cfg.saving.mode == "trigger") {
+      if (f["trigger_skip_frames"])
+        cfg.saving.trigger_skip_frames = f["trigger_skip_frames"].as<int>();
     }
     if (cfg.saving.mode == "aruco" || cfg.saving.mode == "aruco2x2") {
       if (f["aruco_full_res_detection"])

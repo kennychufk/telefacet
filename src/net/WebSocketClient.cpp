@@ -140,6 +140,31 @@ void WebSocketClient::handleText(const std::string& text) {
       std::lock_guard<std::mutex> lk(meta_mu_);
       lens_position_limits_ = lpl;
     }
+  } else if (type == "trigger_result") {
+    // Asynchronous ack for trigger_capture (§4.17) — it arrives only once the
+    // triggered frame(s) have actually been captured, so it is what a robot
+    // loop waits on before moving again.
+    TriggerResult tr;
+    tr.valid      = true;
+    tr.trigger_id = j.value("trigger_id", 0u);
+    tr.cancelled  = j.value("cancelled", false);
+    if (j.contains("captures") && j["captures"].is_array()) {
+      for (const auto& c : j["captures"]) {
+        TriggerCapture tc;
+        tc.camera_id = c.value("camera_id", 0u);
+        tc.frame_id  = c.value("frame_id", 0u);
+        tc.filename  = c.value("filename", std::string{});
+        tr.captures.push_back(std::move(tc));
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lk(meta_mu_);
+      last_trigger_result_ = tr;
+    }
+    spdlog::info("[ws#{}] trigger {} {}: {} capture(s)", server_index_,
+                 tr.trigger_id, tr.cancelled ? "cancelled" : "complete",
+                 tr.captures.size());
+    if (on_trigger_) on_trigger_(server_index_, tr);
   } else if (type == "status") {
     if (on_status_)
       on_status_(server_index_, type, j.value("message", std::string{}));
@@ -191,6 +216,14 @@ bool WebSocketClient::setSaveMode(const std::string& mode,
                                   const nlohmann::json& params) {
   return sendCommand(
       {{"cmd", proto::cmd::kSetProcessMode}, {"mode", mode}, {"params", params}});
+}
+
+bool WebSocketClient::triggerCapture(std::optional<std::uint32_t> camera_id,
+                                     std::optional<int> skip_frames) {
+  nlohmann::json cmd = {{"cmd", proto::cmd::kTriggerCapture}};
+  if (camera_id) cmd["camera_id"] = *camera_id;
+  if (skip_frames) cmd["skip_frames"] = *skip_frames;
+  return sendCommand(cmd);
 }
 
 bool WebSocketClient::startCameras() {
@@ -257,6 +290,11 @@ FrameDurationLimits WebSocketClient::frameDurationLimits() const {
 LensPositionLimits WebSocketClient::lensPositionLimits() const {
   std::lock_guard<std::mutex> lk(meta_mu_);
   return lens_position_limits_;
+}
+
+TriggerResult WebSocketClient::lastTriggerResult() const {
+  std::lock_guard<std::mutex> lk(meta_mu_);
+  return last_trigger_result_;
 }
 
 }  // namespace telefacet::net

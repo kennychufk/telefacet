@@ -20,9 +20,11 @@
 
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -52,14 +54,42 @@ struct CameraMarkers {
   std::vector<data::ArucoMarker> markers;
 };
 
+// One camera's frame kept by a triggerCapture() call.
+struct TriggerCapture {
+  std::size_t   global_camera_id = 0;  // stable index into cameras()
+  std::size_t   server_index     = 0;
+  std::uint32_t local_camera_id  = 0;
+  std::uint32_t frame_id         = 0;
+  // Path *on the server host* that the frame was queued to. Empty when the
+  // trigger mode is running with save_frames off.
+  std::string   filename;
+};
+
+// Result of one triggerCapture() across every configured server.
+struct TriggerOutcome {
+  // Every server acked before the timeout. False ⇒ `captures` is partial and
+  // some server never reported — check that it is connected and in `trigger`
+  // mode (a rejected request answers with an `error`, never an ack).
+  bool complete  = false;
+  // A server abandoned its trigger because capture stopped while it was
+  // pending; that server's cameras are missing from `captures`.
+  bool cancelled = false;
+  // One entry per camera that delivered a frame, sorted by global_camera_id.
+  std::vector<TriggerCapture> captures;
+
+  explicit operator bool() const { return complete && !cancelled; }
+};
+
 // Options applied during start(). Defaults are tuned for pose estimation:
 // subpixel corners on, no on-disk frame saving, header-only transport (we only
 // need the corner block, not the pixels — a large bandwidth saving).
 struct ClientOptions {
-  // Server-side processing mode (protocol §4.5): none|buffer|batch|
+  // Server-side processing mode (protocol §4.5): none|buffer|batch|trigger|
   // checkerboard|checkerboard2x2|aruco|aruco2x2. The aruco_* fields below apply
   // only to the aruco modes. Use "none" with header_only=false to stream raw
   // full frames (every captured frame — "none" has no detector to gate on).
+  // Use "trigger" (with save_frames=true) to save frames only on demand, via
+  // triggerCapture() — the automated-calibration path.
   std::string save_mode = "aruco2x2";
 
   // aruco2x2 detector params (server-side ProcessConfig).
@@ -67,7 +97,10 @@ struct ClientOptions {
   int  aruco_num_threads        = 4;      // quadrant parallelism (1..4)
   bool aruco_corner_refine      = true;   // CORNER_REFINE_SUBPIX for accuracy
 
-  bool save_frames = false;  // keep the Pi from writing frames to disk
+  // Whether the Pi writes frames to disk. Off by default (pose estimation
+  // needs no files) — but `trigger` mode is pointless without it, so set it
+  // true whenever save_mode is "trigger".
+  bool save_frames = false;
   bool header_only = true;   // stream header+detection block only, no pixels
 
   // Optional manual camera controls applied before streaming starts.
@@ -111,6 +144,23 @@ class Client {
   // (a frame in which nothing was detected).
   std::vector<CameraMarkers> poll();
 
+  // Save one frame per camera, right now — the API behind the client's manual
+  // trigger button, and the call an automated calibration rig makes once its
+  // arm has come to a complete stop. Requires save_mode "trigger"; in any other
+  // mode the servers reject the request and this returns `complete == false`.
+  //
+  // Blocks until every configured server has acked (meaning its cameras really
+  // did deliver the triggered frame, so the arm is free to move again) or
+  // `timeout` elapses. `skip_frames` overrides the server's configured
+  // `trigger_skip_frames` — extra frames discarded per camera before the kept
+  // one, for rigs that need more settling time.
+  //
+  // Not reentrant: one triggerCapture() at a time per Client (the servers also
+  // reject overlapping triggers).
+  TriggerOutcome triggerCapture(
+      std::chrono::milliseconds timeout = std::chrono::milliseconds{5000},
+      std::optional<int> skip_frames = std::nullopt);
+
   // Escape hatches for advanced callers (per-camera lens/exposure, stats, ...).
   data::CameraStore&       store()   { return store_; }
   net::MultiServerManager& manager() { return *msm_; }
@@ -126,6 +176,15 @@ class Client {
   std::unique_ptr<net::MultiServerManager>  msm_;
   std::unordered_map<std::size_t, std::uint64_t> seen_seq_;  // per-camera cursor
   bool started_ = false;
+
+  // triggerCapture() rendezvous. Acks land on the WebSocket receive threads
+  // (one per server) and are collected here until every armed server reported.
+  mutable std::mutex      trigger_mu_;
+  std::condition_variable trigger_cv_;
+  // {server_index, ack}; the index is what maps a server-local camera id back
+  // onto the global roster. Guarded by trigger_mu_.
+  std::vector<std::pair<std::size_t, net::TriggerResult>> trigger_acks_;
+  std::size_t             trigger_expected_ = 0;  // servers armed by the call
 };
 
 }  // namespace telefacet::client

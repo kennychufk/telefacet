@@ -11,8 +11,9 @@ namespace telefacet::ui {
 
 namespace {
 
-const char* kSaveModes[] = {"none", "buffer", "batch", "checkerboard",
-                            "checkerboard2x2", "aruco", "aruco2x2"};
+const char* kSaveModes[] = {"none", "buffer", "batch", "trigger",
+                            "checkerboard", "checkerboard2x2", "aruco",
+                            "aruco2x2"};
 
 // Palette (mirrors the web client's --live / --accent / muted tones).
 const ImVec4 kGreen  = ImVec4(0.35f, 0.92f, 0.55f, 1.0f);
@@ -61,6 +62,7 @@ ControlPanel::ControlPanel(data::CameraStore& store,
   aruco_full_res_      = s.aruco_full_res_detection;
   aruco_threads_       = s.aruco_num_threads;
   aruco_corner_refine_ = s.aruco_corner_refine;
+  trigger_skip_frames_ = s.trigger_skip_frames;
 }
 
 bool ControlPanel::checkerboardMode() const {
@@ -71,6 +73,10 @@ bool ControlPanel::checkerboardMode() const {
 bool ControlPanel::arucoMode() const {
   const std::string m = kSaveModes[save_mode_idx_];
   return m == "aruco" || m == "aruco2x2";
+}
+
+bool ControlPanel::triggerMode() const {
+  return std::string(kSaveModes[save_mode_idx_]) == "trigger";
 }
 
 ControlPanel::Agg ControlPanel::computeAgg() const {
@@ -152,6 +158,7 @@ void ControlPanel::draw() {
   drawExposure(agg);
   drawFocus(agg);
   drawSaveMode();
+  drawTrigger(agg);
 
   ImGui::End();
 }
@@ -493,6 +500,13 @@ void ControlPanel::drawSaveMode() {
     ImGui::InputInt("detect threads", &cb_threads_);
   }
 
+  if (triggerMode()) {
+    ImGui::SeparatorText("Trigger params");
+    ImGui::SetNextItemWidth(120);
+    ImGui::InputInt("skip_frames", &trigger_skip_frames_);
+    ImGui::TextDisabled("frames discarded per camera before the kept one");
+  }
+
   if (arucoMode()) {
     ImGui::SeparatorText("ArUco params");
     ImGui::Checkbox("full-res detection", &aruco_full_res_);
@@ -511,7 +525,62 @@ void ControlPanel::drawSaveMode() {
     cb_cols_        = std::max(1, cb_cols_);
     cb_threads_     = std::max(1, cb_threads_);
     aruco_threads_  = std::clamp(aruco_threads_, 1, 4);
+    trigger_skip_frames_ = std::max(0, trigger_skip_frames_);
     msm_.setSaveModeAll(kSaveModes[save_mode_idx_], buildSaveParams());
+    // Remember what the servers are actually running: the combo alone is just
+    // an unapplied selection, and the trigger button must follow the former.
+    applied_save_mode_ = kSaveModes[save_mode_idx_];
+  }
+}
+
+// Manual shutter button for the `trigger` process mode — the same request an
+// automated calibration rig issues once its arm has come to a complete stop.
+void ControlPanel::drawTrigger(const Agg& agg) {
+  const bool applied = applied_save_mode_ == "trigger";
+  // Show the section as soon as the mode is *selected* so the button is
+  // discoverable, but keep it inert until that mode has been pushed.
+  if (!applied && !triggerMode()) return;
+
+  ImGui::SeparatorText("Trigger");
+
+  // Newest ack across the connected servers (each acks its own cameras).
+  std::uint32_t newest_id = 0;
+  std::size_t   captures  = 0;
+  bool          any_ack   = false;
+  bool          cancelled = false;
+  for (std::size_t i = 0; i < msm_.serverCount(); ++i) {
+    auto* c = msm_.client(i);
+    if (!c) continue;
+    const auto tr = c->lastTriggerResult();
+    if (!tr.valid) continue;
+    any_ack   = true;
+    newest_id = std::max(newest_id, tr.trigger_id);
+    captures += tr.captures.size();
+    cancelled = cancelled || tr.cancelled;
+  }
+  if (trigger_pending_ && any_ack && newest_id != trigger_baseline_id_)
+    trigger_pending_ = false;
+
+  const bool ready = applied && agg.stage == Stage::Running;
+  ImGui::BeginDisabled(!ready || trigger_pending_);
+  if (ImGui::Button("Trigger capture", ImVec2(-1, 0))) {
+    trigger_baseline_id_ = newest_id;
+    trigger_pending_ =
+        msm_.triggerCaptureAll(std::max(0, trigger_skip_frames_)) > 0;
+  }
+  ImGui::EndDisabled();
+
+  if (!applied) {
+    ImGui::TextDisabled("press \"Apply save mode\" to switch the servers to trigger");
+  } else if (agg.stage != Stage::Running) {
+    ImGui::TextDisabled("cameras must be running");
+  } else if (trigger_pending_) {
+    ImGui::TextColored(kAmber, "waiting for the triggered frame...");
+  } else if (any_ack) {
+    ImGui::TextColored(cancelled ? kAmber : kGreen, "trigger #%u: %zu frame(s)%s",
+                       newest_id, captures, cancelled ? " (cancelled)" : "");
+  } else {
+    ImGui::TextDisabled("saves one frame per running camera");
   }
 }
 
@@ -533,6 +602,9 @@ nlohmann::json ControlPanel::buildSaveParams() const {
     p["aruco_full_res_detection"] = aruco_full_res_;
     p["aruco_num_threads"] = aruco_threads_;
     p["aruco_corner_refine"] = aruco_corner_refine_;
+  }
+  if (triggerMode()) {
+    p["trigger_skip_frames"] = trigger_skip_frames_;
   }
   return p;
 }

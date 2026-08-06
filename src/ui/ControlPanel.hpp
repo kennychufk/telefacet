@@ -52,6 +52,8 @@ class ControlPanel {
   void drawExposure(const Agg& agg);
   void drawFocus(const Agg& agg);
   void drawSaveMode();
+  // Manual shutter for the `trigger` process mode; hidden in every other mode.
+  void drawTrigger(const Agg& agg);
 
   void advance(const Agg& agg, const std::vector<data::CameraInfo>& roster);
   void retreat(const Agg& agg);
@@ -63,6 +65,7 @@ class ControlPanel {
   nlohmann::json buildSaveParams() const;
   bool checkerboardMode() const;
   bool arucoMode() const;
+  bool triggerMode() const;
 
   data::CameraStore&        store_;
   net::MultiServerManager&  msm_;
@@ -83,6 +86,13 @@ class ControlPanel {
   bool aruco_full_res_      = false;
   int  aruco_threads_       = 4;
   bool aruco_corner_refine_ = false;
+  int  trigger_skip_frames_ = 0;
+
+  // Trigger section state. The combo alone is only a selection, so the button
+  // keys off the mode last pushed with "Apply save mode".
+  std::string   applied_save_mode_;
+  bool          trigger_pending_     = false;  // request sent, ack outstanding
+  std::uint32_t trigger_baseline_id_ = 0;      // newest ack id when we fired
 
   // Focus control state. focus_manual_ false ⇒ continuous AF (sends -1).
   bool  focus_manual_ = false;

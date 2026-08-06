@@ -1,0 +1,16 @@
+# Fixture config used by e2e_config_loader_test.cpp for the `trigger` process
+# mode — save-on-demand, driven by the trigger_capture command (protocol §4.17).
+
+servers:
+  - address: ws://localhost:9001
+    sensor: imx519
+    width: 1456
+    height: 1088
+
+processing:
+  mode: trigger
+  save_frames: true
+  output_dir: calibration_frames
+  writer_threads: 2
+  # Non-default so the loader test proves the trigger field is parsed.
+  trigger_skip_frames: 2

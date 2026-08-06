@@ -26,6 +26,17 @@ TEST(ConfigLoader, LoadsExampleYaml) {
   EXPECT_FALSE(cfg.saving.save_frames);
 }
 
+TEST(ConfigLoader, LoadsTriggerModeYaml) {
+  auto path = std::string(TELEFACET_TEST_FIXTURES_DIR) + "/trigger_config.yaml";
+  auto cfg = telefacet::config::loadFromFile(path);
+
+  EXPECT_EQ(cfg.saving.mode, "trigger");
+  EXPECT_TRUE(cfg.saving.save_frames);
+  EXPECT_EQ(cfg.saving.output_dir, "calibration_frames");
+  EXPECT_EQ(cfg.saving.writer_threads, 2u);
+  EXPECT_EQ(cfg.saving.trigger_skip_frames, 2);
+}
+
 TEST(ConfigLoader, ThrowsOnMissingFile) {
   EXPECT_THROW(
       telefacet::config::loadFromFile("/nonexistent/path/to/config.yaml"),

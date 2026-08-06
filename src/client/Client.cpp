@@ -2,9 +2,11 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 namespace telefacet::client {
 
@@ -12,6 +14,16 @@ using namespace std::chrono_literals;
 
 Client::Client(config::Config cfg) : cfg_(std::move(cfg)) {
   msm_ = std::make_unique<net::MultiServerManager>(store_, cfg_);
+  // Collect trigger acks as they arrive (one per server, each on that server's
+  // receive thread) so triggerCapture() can block until all of them landed.
+  msm_->setOnTriggerResult(
+      [this](std::size_t server_index, const net::TriggerResult& tr) {
+        {
+          std::lock_guard<std::mutex> lk(trigger_mu_);
+          trigger_acks_.emplace_back(server_index, tr);
+        }
+        trigger_cv_.notify_all();
+      });
 }
 
 Client::~Client() { stop(); }
@@ -144,6 +156,67 @@ bool Client::latest(std::size_t global_camera_id, CameraMarkers& out) {
   if (auto* info = store_.find(global_camera_id))
     out.server_index = info->server_index;
   return true;
+}
+
+TriggerOutcome Client::triggerCapture(std::chrono::milliseconds timeout,
+                                      std::optional<int> skip_frames) {
+  TriggerOutcome out;
+  if (!msm_) return out;
+
+  // Drop any ack left over from a previous (timed-out) call before arming, so
+  // a late reply can't be mistaken for this trigger's.
+  {
+    std::lock_guard<std::mutex> lk(trigger_mu_);
+    trigger_acks_.clear();
+    trigger_expected_ = 0;
+  }
+
+  const std::size_t armed = msm_->triggerCaptureAll(skip_frames);
+  if (armed == 0) {
+    spdlog::warn("telefacet::client: trigger reached no connected server");
+    return out;
+  }
+  {
+    std::lock_guard<std::mutex> lk(trigger_mu_);
+    trigger_expected_ = armed;
+  }
+
+  std::vector<std::pair<std::size_t, net::TriggerResult>> acks;
+  {
+    std::unique_lock<std::mutex> lk(trigger_mu_);
+    out.complete = trigger_cv_.wait_for(lk, timeout, [&] {
+      return trigger_acks_.size() >= trigger_expected_;
+    });
+    acks = std::move(trigger_acks_);
+    trigger_acks_.clear();
+    trigger_expected_ = 0;
+  }
+
+  if (!out.complete)
+    spdlog::warn("telefacet::client: trigger timed out — {}/{} server(s) acked",
+                 acks.size(), armed);
+
+  for (const auto& [server_index, ack] : acks) {
+    if (ack.cancelled) out.cancelled = true;
+    for (const auto& cap : ack.captures) {
+      TriggerCapture tc;
+      tc.server_index    = server_index;
+      tc.local_camera_id = cap.camera_id;
+      tc.frame_id        = cap.frame_id;
+      tc.filename        = cap.filename;
+      // Map the server-local id onto the global roster the caller sees. An
+      // unknown camera (discovery race) keeps global id 0 rather than dropping
+      // the capture, since the filename is still useful.
+      if (auto* info = store_.findByServer(server_index, cap.camera_id))
+        tc.global_camera_id = info->global_id;
+      out.captures.push_back(std::move(tc));
+    }
+  }
+  std::sort(out.captures.begin(), out.captures.end(),
+            [](const TriggerCapture& a, const TriggerCapture& b) {
+              return a.global_camera_id < b.global_camera_id;
+            });
+  return out;
 }
 
 std::vector<CameraMarkers> Client::poll() {

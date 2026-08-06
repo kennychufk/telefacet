@@ -18,6 +18,11 @@ MultiServerManager::MultiServerManager(data::CameraStore& store,
                               std::shared_ptr<data::FrameBuffer> b) {
       onFrame(idx, std::move(b));
     });
+    // Re-forward each server's trigger ack to whoever subscribed on the
+    // manager (the headless Client, or the UI).
+    client->setOnTriggerResult([this](std::size_t idx, const TriggerResult& tr) {
+      if (on_trigger_) on_trigger_(idx, tr);
+    });
     clients_.push_back(std::move(client));
   }
 }
@@ -67,6 +72,17 @@ void MultiServerManager::setSaveModeAll(const std::string& mode,
   for (auto& c : clients_) {
     if (c->connected()) c->setSaveMode(mode, params);
   }
+}
+
+std::size_t MultiServerManager::triggerCaptureAll(
+    std::optional<int> skip_frames) {
+  std::size_t sent = 0;
+  for (auto& c : clients_) {
+    // camera_id omitted ⇒ the server arms every camera it has running, which
+    // is what a multi-camera calibration pose needs.
+    if (c->connected() && c->triggerCapture(std::nullopt, skip_frames)) ++sent;
+  }
+  return sent;
 }
 
 void MultiServerManager::setHeaderOnlyAll(bool enabled) {
@@ -129,6 +145,9 @@ nlohmann::json MultiServerManager::savingParamsFromConfig(
     p["checkerboard_cols"] = s.checkerboard_cols;
     p["checkerboard_full_res_detection"] = s.checkerboard_full_res_detection;
     p["checkerboard_num_threads"] = s.checkerboard_num_threads;
+  }
+  if (m == "trigger") {
+    p["trigger_skip_frames"] = s.trigger_skip_frames;
   }
   if (m == "aruco" || m == "aruco2x2") {
     p["aruco_full_res_detection"] = s.aruco_full_res_detection;

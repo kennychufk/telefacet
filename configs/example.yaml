@@ -14,12 +14,17 @@ servers:
   #   height: 1296
 
 processing:                   # (formerly `frame_saving`)
-  mode: none                  # none | buffer | batch | checkerboard | checkerboard2x2 | aruco | aruco2x2
+  mode: none                  # none | buffer | batch | trigger | checkerboard | checkerboard2x2 | aruco | aruco2x2
   save_frames: true           # false ⇒ detector still runs + streams corners/markers, but no frames written to disk
   output_dir: camera_frames
   prepend_timestamp_to_dir: false
   batch_size: 10
   writer_threads: 4
+  # trigger mode only — save-on-demand: nothing is written until the client
+  # sends trigger_capture (the control panel's "Trigger capture" button).
+  # trigger_skip_frames is how many settling frames each camera discards before
+  # the one that is kept; a per-request skip_frames overrides it.
+  trigger_skip_frames: 0
   # checkerboard / checkerboard2x2 modes only:
   checkerboard_rows: 8
   checkerboard_cols: 11

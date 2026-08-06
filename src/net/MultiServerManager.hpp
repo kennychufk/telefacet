@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,16 @@ class MultiServerManager {
   // keep serverState() honest after configure/start/stop and external changes.
   void getStateAll();
   void setSaveModeAll(const std::string& mode, const nlohmann::json& params);
+  // Fire a `trigger` mode capture on every connected server (§4.17). Each
+  // server arms all of its running cameras and acks asynchronously once they
+  // have delivered; subscribe via setOnTriggerResult() or poll
+  // WebSocketClient::lastTriggerResult(). Returns how many servers it reached.
+  std::size_t triggerCaptureAll(std::optional<int> skip_frames = std::nullopt);
+  // Forwarded from every WebSocketClient. Fires on that client's receive
+  // thread, so the handler must be thread-safe.
+  void setOnTriggerResult(WebSocketClient::TriggerResultCallback cb) {
+    on_trigger_ = std::move(cb);
+  }
   void setHeaderOnlyAll(bool enabled);
   void resetFrameCountsAll();
   // Global camera controls (applied identically on every server, §4.12–4.14).
@@ -73,6 +84,7 @@ class MultiServerManager {
   data::CameraStore&                                store_;
   const config::Config&                             cfg_;
   std::vector<std::unique_ptr<WebSocketClient>>     clients_;
+  WebSocketClient::TriggerResultCallback            on_trigger_;
 };
 
 }  // namespace telefacet::net

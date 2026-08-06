@@ -51,6 +51,25 @@ struct LensPositionLimits {
   int                   num_cameras = 0;
 };
 
+// One camera's contribution to a `trigger_result` (§4.17): the frame the
+// trigger kept, and where the server queued it.
+struct TriggerCapture {
+  std::uint32_t camera_id = 0;  // server-local id
+  std::uint32_t frame_id  = 0;
+  std::string   filename;       // empty when the mode runs with save_frames off
+};
+
+// Asynchronous ack for a `trigger_capture` request. Arrives once every armed
+// camera on that server has delivered its frame — or, with `cancelled` set,
+// when stop_cameras abandoned a still-pending trigger (`captures` then holds
+// only the cameras that made it). `valid` is false until a reply lands.
+struct TriggerResult {
+  bool                        valid      = false;
+  std::uint32_t               trigger_id = 0;
+  bool                        cancelled  = false;
+  std::vector<TriggerCapture> captures;
+};
+
 class WebSocketClient {
  public:
   using FrameCallback =
@@ -65,6 +84,8 @@ class WebSocketClient {
                          const std::string& /*message*/)>;
   using ConnectionCallback =
       std::function<void(std::size_t /*server_index*/, bool /*connected*/)>;
+  using TriggerResultCallback =
+      std::function<void(std::size_t /*server_index*/, const TriggerResult&)>;
 
   // `sensor` is the per-server sensor substring passed to `discover` (empty ⇒
   // omit the param and let the server use its default).
@@ -84,6 +105,10 @@ class WebSocketClient {
   void setOnDiscovery(DiscoveryCallback cb){ on_discovery_ = std::move(cb); }
   void setOnStatus(StatusCallback cb)      { on_status_    = std::move(cb); }
   void setOnConnection(ConnectionCallback cb){ on_conn_    = std::move(cb); }
+  // Fires on the WebSocket's receive thread when a `trigger_result` lands.
+  void setOnTriggerResult(TriggerResultCallback cb) {
+    on_trigger_ = std::move(cb);
+  }
 
   // High-level commands (return false if disconnected). Omitted `width`/
   // `height` in configureCameras ⇒ the param is not sent (server default).
@@ -94,6 +119,14 @@ class WebSocketClient {
                         std::optional<std::uint32_t> height);
   bool unconfigure();
   bool setSaveMode(const std::string& mode, const nlohmann::json& params);
+  // Save-on-demand shutter for the `trigger` process mode (§4.17). Sending it
+  // in any other mode draws an `error` from the server. `camera_id` omitted ⇒
+  // every running camera on this server is armed; `skip_frames` omitted ⇒ the
+  // server's configured `trigger_skip_frames`. Returns whether the request was
+  // sent — the capture itself is confirmed later via the trigger-result
+  // callback / lastTriggerResult().
+  bool triggerCapture(std::optional<std::uint32_t> camera_id = std::nullopt,
+                      std::optional<int> skip_frames = std::nullopt);
   bool startCameras();
   bool stopCameras();
   bool startStream(std::uint32_t camera_id);
@@ -115,6 +148,9 @@ class WebSocketClient {
   std::string serverState() const;
   FrameDurationLimits frameDurationLimits() const;
   LensPositionLimits  lensPositionLimits() const;
+  // Most recent `trigger_result` from this server (`valid` false until one
+  // arrives). Polling this is the simplest way for a UI to show the outcome.
+  TriggerResult       lastTriggerResult() const;
 
  private:
   void onMessage(const ix::WebSocketMessagePtr& msg);
@@ -138,11 +174,13 @@ class WebSocketClient {
   std::string                  server_state_;
   FrameDurationLimits          frame_duration_limits_;
   LensPositionLimits           lens_position_limits_;
+  TriggerResult                last_trigger_result_;
 
-  FrameCallback        on_frame_;
-  DiscoveryCallback    on_discovery_;
-  StatusCallback       on_status_;
-  ConnectionCallback   on_conn_;
+  FrameCallback         on_frame_;
+  DiscoveryCallback     on_discovery_;
+  StatusCallback        on_status_;
+  ConnectionCallback    on_conn_;
+  TriggerResultCallback on_trigger_;
 };
 
 }  // namespace telefacet::net

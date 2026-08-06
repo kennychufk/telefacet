@@ -23,7 +23,7 @@ connectAll → wait for discovery → configureAll → lens/exposure → set sav
 
 | option | default | why |
 |---|---|---|
-| `save_mode` | `"aruco2x2"` | server-side processing mode; any mode from protocol §4.5 |
+| `save_mode` | `"aruco2x2"` | server-side processing mode; any mode from protocol §4.5 (incl. `"trigger"` — see below) |
 | `aruco_corner_refine` | `true` | subpixel corners → better PnP |
 | `save_frames` | `false` | don't fill the Pi's disk |
 | `header_only` | `true` | stream only the header + corner block, **not** the pixels — a large bandwidth saving; the detection block rides every frame regardless |
@@ -41,6 +41,52 @@ directly — `client.store().consumeIfNew(global_id, cursor)` hands back the
 
 Note that `"none"` is the only ungated mode: detector modes stream only the
 frames the on-device detector finished, so they drop frames under load by design.
+
+## Save-on-demand: `triggerCapture()`
+
+With `save_mode = "trigger"` the servers write **nothing** until asked — frames
+still stream live, but one only hits disk when the client fires the shutter
+(protocol §4.17). This is the automated-calibration path: move the camera with a
+robot arm, wait for it to come to a complete stop, then trigger, so no saved
+frame carries motion blur.
+
+```cpp
+telefacet::client::ClientOptions opts;
+opts.save_mode   = "trigger";
+opts.save_frames = true;           // trigger mode is pointless without it
+opts.header_only = false;          // optional: also watch the live preview
+client.start(opts);
+
+for (const Pose& pose : calibration_poses) {
+  arm.moveTo(pose);
+  arm.waitUntilStopped();
+
+  auto shot = client.triggerCapture(std::chrono::seconds(5));
+  if (!shot) { /* timed out, or a server cancelled — retry this pose */ }
+  for (const auto& c : shot.captures) {
+    // c.global_camera_id, c.frame_id, c.filename (path on the server host)
+  }
+}
+```
+
+`triggerCapture()` blocks until **every** server has acked, which happens only
+once its cameras have really delivered the triggered frame — so returning is the
+signal the arm may move again. It arms all running cameras on all servers, so
+one call yields one frame per camera, all at the same pose.
+
+| field | meaning |
+|---|---|
+| `complete` | every server acked before the timeout. False ⇒ partial: check the servers are connected and actually in `trigger` mode (a rejected request answers with `error`, never an ack) |
+| `cancelled` | a server abandoned its trigger because capture stopped mid-flight; its cameras are missing from `captures` |
+| `captures` | one entry per camera that delivered, sorted by `global_camera_id`: ids, `frame_id`, and the server-side `filename` |
+
+`skip_frames` (2nd arg) overrides the server's configured `trigger_skip_frames`
+— extra frames discarded per camera before the kept one, for rigs needing more
+settling time than the frame already in flight allows.
+
+One trigger at a time: the call is not reentrant, and the servers reject
+overlapping triggers.
+
 ## Consuming detections
 
 The pull API is latest-wins and non-blocking, matching the live-viewer

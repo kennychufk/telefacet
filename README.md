@@ -6,7 +6,10 @@ converts the YUV420 frames delivered by the server's hardware ISP to RGB on
 the GPU, and renders them in a dockable multi-camera view. Detector process modes
 (`checkerboard` / `checkerboard2x2` / `aruco` / `aruco2x2`) overlay their
 per-frame detections on each camera view — checkerboard corners in green,
-ArUco/AprilTag markers as amber quads with corner dots and id labels.
+ArUco/AprilTag markers as amber quads with corner dots and id labels. The
+`trigger` process mode adds a save-on-demand shutter: nothing is written to disk
+until the control panel's **Trigger capture** button (or, headlessly,
+`Client::triggerCapture()`) asks for a frame.
 
 ## Build (Linux)
 

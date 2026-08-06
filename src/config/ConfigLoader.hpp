@@ -22,7 +22,7 @@ struct ServerCfg {
 };
 
 struct FrameSavingCfg {
-  // none|buffer|batch|checkerboard|checkerboard2x2|aruco|aruco2x2
+  // none|buffer|batch|trigger|checkerboard|checkerboard2x2|aruco|aruco2x2
   std::string mode = "none";
   // When false, detector modes still run and stream their side-products but no
   // frames are written to disk (server-side ProcessConfig::save_frames).
@@ -40,6 +40,9 @@ struct FrameSavingCfg {
   bool aruco_full_res_detection = false;
   int  aruco_num_threads = 4;
   bool aruco_corner_refine = false;
+  // trigger field: frames discarded per camera before the one a
+  // trigger_capture keeps (a per-request `skip_frames` overrides it).
+  int  trigger_skip_frames = 0;
 };
 
 struct Config {

@@ -107,6 +107,9 @@ inline constexpr const char* kGetState               = "get_state";
 inline constexpr const char* kConfigure              = "configure";
 inline constexpr const char* kUnconfigure            = "unconfigure";
 inline constexpr const char* kSetProcessMode         = "set_process_mode";
+// Save-on-demand shutter for the `trigger` process mode (§4.17). Answered
+// asynchronously with a `trigger_result` message, not a plain `status`.
+inline constexpr const char* kTriggerCapture         = "trigger_capture";
 inline constexpr const char* kStartCameras           = "start_cameras";
 inline constexpr const char* kStartStream            = "start_stream";
 inline constexpr const char* kStopStream             = "stop_stream";
