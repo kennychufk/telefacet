@@ -72,6 +72,13 @@ Config loadFromFile(const std::string& path) {
       cfg.saving.prepend_timestamp_to_dir = f["prepend_timestamp_to_dir"].as<bool>();
     if (f["batch_size"])     cfg.saving.batch_size     = f["batch_size"].as<std::size_t>();
     if (f["writer_threads"]) cfg.saving.writer_threads = f["writer_threads"].as<std::size_t>();
+    if (f["backlog_max_bytes"])
+      cfg.saving.backlog_max_bytes = f["backlog_max_bytes"].as<std::size_t>();
+    if (f["disk_write_bytes_per_sec"])
+      cfg.saving.disk_write_bytes_per_sec =
+          f["disk_write_bytes_per_sec"].as<std::size_t>();
+    if (f["allow_overcommit"])
+      cfg.saving.allow_overcommit = f["allow_overcommit"].as<bool>();
     if (cfg.saving.mode == "checkerboard" ||
         cfg.saving.mode == "checkerboard2x2") {
       if (f["checkerboard_rows"])

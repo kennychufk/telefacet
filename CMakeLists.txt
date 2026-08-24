@@ -15,6 +15,7 @@ endif()
 
 option(TELEFACET_BUILD_GUI   "Build the GLFW/ImGui GUI executable" ON)
 option(TELEFACET_BUILD_TESTS "Build the headless end-to-end test binary" OFF)
+option(TELEFACET_BUILD_TOOLS "Build the headless diagnostic tools in tools/" OFF)
 
 find_package(Threads REQUIRED)
 
@@ -79,6 +80,12 @@ if(TELEFACET_BUILD_GUI)
     OpenGL::GL
     ${CMAKE_DL_LIBS}
   )
+endif()
+
+# ----- Headless diagnostic tools -----
+if(TELEFACET_BUILD_TOOLS)
+  add_executable(lowfps_repro tools/lowfps_repro.cpp)
+  target_link_libraries(lowfps_repro PRIVATE telefacet_core)
 endif()
 
 # ----- Headless end-to-end tests -----

@@ -80,6 +80,8 @@ void Client::start(const ClientOptions& opts) {
   //    is an async `error` reply we'd never notice.
   if (opts.lens_position) msm_->setLensPositionAll(*opts.lens_position);
   if (opts.exposure_time_us) msm_->setExposureTimeAll(*opts.exposure_time_us);
+  if (opts.frame_duration_us)
+    msm_->setFrameDurationAll(*opts.frame_duration_us);
 
   // 5) Switch to the requested mode and stop persisting frames to disk. For the
   //    detector modes the corner block still rides every frame regardless of

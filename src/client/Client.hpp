@@ -106,6 +106,10 @@ struct ClientOptions {
   // Optional manual camera controls applied before streaming starts.
   std::optional<double>       lens_position;     // dioptres; matches calibration
   std::optional<std::int64_t> exposure_time_us;  // manual shutter
+  // Locks FrameDurationLimits to this value (µs), i.e. a fixed capture
+  // cadence: 500000 ⇒ 2 fps. Unset ⇒ libcamera's default range. Mirrors the
+  // GUI's "Lock fps" control (protocol §4.14).
+  std::optional<std::int64_t> frame_duration_us;
 
   // How long start() waits for connect + discovery + each state transition.
   std::chrono::milliseconds start_timeout{8000};

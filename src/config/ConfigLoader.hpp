@@ -43,6 +43,15 @@ struct FrameSavingCfg {
   // trigger field: frames discarded per camera before the one a
   // trigger_capture keeps (a per-request `skip_frames` overrides it).
   int  trigger_skip_frames = 0;
+  // Resource guards (server-side ProcessConfig). A mode that retains or writes
+  // every frame builds a backlog whenever it outruns its sink; the server
+  // bounds that backlog and refuses a mode that provably cannot keep up.
+  //   backlog_max_bytes        0 => the server derives one from MemAvailable
+  //   disk_write_bytes_per_sec 0 => the server measures the output filesystem
+  //   allow_overcommit         start anyway when the check says infeasible
+  std::size_t backlog_max_bytes = 0;
+  std::size_t disk_write_bytes_per_sec = 0;
+  bool allow_overcommit = false;
 };
 
 struct Config {

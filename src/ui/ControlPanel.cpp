@@ -591,6 +591,12 @@ nlohmann::json ControlPanel::buildSaveParams() const {
       {"prepend_timestamp_to_dir", prepend_ts_},
       {"batch_size", batch_size_},
       {"writer_threads", writer_threads_},
+      // Not exposed as widgets: these come from the loaded `processing` config
+      // and are passed straight through, so hitting Apply cannot silently
+      // reset them to the server's defaults.
+      {"backlog_max_bytes", msm_.savingConfig().backlog_max_bytes},
+      {"disk_write_bytes_per_sec", msm_.savingConfig().disk_write_bytes_per_sec},
+      {"allow_overcommit", msm_.savingConfig().allow_overcommit},
   };
   if (checkerboardMode()) {
     p["checkerboard_rows"] = cb_rows_;

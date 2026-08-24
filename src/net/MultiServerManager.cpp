@@ -139,6 +139,11 @@ nlohmann::json MultiServerManager::savingParamsFromConfig(
       {"prepend_timestamp_to_dir", s.prepend_timestamp_to_dir},
       {"batch_size", s.batch_size},
       {"writer_threads", s.writer_threads},
+      // Mode-independent resource guards; the server ignores the two byte
+      // counts when they are 0 and decides for itself.
+      {"backlog_max_bytes", s.backlog_max_bytes},
+      {"disk_write_bytes_per_sec", s.disk_write_bytes_per_sec},
+      {"allow_overcommit", s.allow_overcommit},
   };
   if (m == "checkerboard" || m == "checkerboard2x2") {
     p["checkerboard_rows"] = s.checkerboard_rows;
