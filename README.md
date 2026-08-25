@@ -33,6 +33,18 @@ the binary at configure time, so the executable is self-contained.
 control panel to `Configure`, `Start cameras`, then toggle individual
 streams. Press **P** to hide/show the control panel.
 
+### Client role
+
+The server distinguishes two client roles (protocol §1.1): one read-write
+**commander** and one read-only **observer** per server. `telefacet` is a
+**commander-only** client: it connects to the bare `address` from the YAML
+(the commander path), owns the camera lifecycle and attributes, and is
+refused with HTTP 503 if another commander already holds that server. An
+observer (for instance `telefacet-web` in observer mode) may watch the same
+server at the same time; the server pushes `state` messages when it comes and
+goes, which `telefacet` logs and otherwise ignores. Its streams are
+independent of, and yield to, this client's.
+
 ## Layout
 
 * `src/net/` — WebSocket client, chunked-frame reassembly, multi-server roster
