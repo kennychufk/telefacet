@@ -61,7 +61,20 @@ void WebSocketClient::onMessage(const ix::WebSocketMessagePtr& msg) {
       break;
 
     case ix::WebSocketMessageType::Error:
-      spdlog::error("[ws#{}] error: {}", server_index_, msg->errorInfo.reason);
+      // A rejected upgrade carries the HTTP status: 503 means the server's
+      // commander slot is already taken by another client (protocol §1.1).
+      // ixwebsocket keeps retrying with backoff, so this repeats until the
+      // other commander leaves.
+      if (msg->errorInfo.http_status == 503) {
+        spdlog::error("[ws#{}] upgrade refused (HTTP 503): the server already "
+                      "has a commander client; retrying",
+                      server_index_);
+      } else if (msg->errorInfo.http_status != 0) {
+        spdlog::error("[ws#{}] upgrade refused (HTTP {}): {}", server_index_,
+                      msg->errorInfo.http_status, msg->errorInfo.reason);
+      } else {
+        spdlog::error("[ws#{}] error: {}", server_index_, msg->errorInfo.reason);
+      }
       break;
 
     case ix::WebSocketMessageType::Message:
@@ -103,12 +116,18 @@ void WebSocketClient::handleText(const std::string& text) {
     spdlog::info("[ws#{}] discovered {} cameras", server_index_, cams.size());
     if (on_discovery_) on_discovery_(server_index_, cams);
   } else if (type == "state") {
+    // Both the get_state reply (cause "query") and the server's unsolicited
+    // pushes on every transition and on the observer's connect/disconnect
+    // (protocol §3.1). Same shape, so the stored state is simply the newest.
     const std::string state = j.value("state", std::string{});
     {
       std::lock_guard<std::mutex> lk(meta_mu_);
       server_state_ = state;
     }
-    spdlog::info("[ws#{}] server state: {}", server_index_, state);
+    spdlog::info("[ws#{}] server state: {} ({}{})", server_index_, state,
+                 j.value("cause", std::string{"query"}),
+                 j.value("observer_connected", false) ? ", observer present"
+                                                       : "");
   } else if (type == "frame_duration_limits") {
     FrameDurationLimits fdl;
     fdl.valid       = true;
@@ -169,7 +188,11 @@ void WebSocketClient::handleText(const std::string& text) {
     if (on_status_)
       on_status_(server_index_, type, j.value("message", std::string{}));
   } else if (type == "error") {
-    spdlog::error("[ws#{}] server error: {}", server_index_,
+    // Coded errors (`capture_timeout`, or `forbidden` — which a commander
+    // never gets) carry a `code`; plain replies carry only `message`.
+    const std::string code = j.value("code", std::string{});
+    spdlog::error("[ws#{}] server error{}: {}", server_index_,
+                  code.empty() ? "" : " [" + code + "]",
                   j.value("message", std::string{}));
     if (on_status_)
       on_status_(server_index_, type, j.value("message", std::string{}));
