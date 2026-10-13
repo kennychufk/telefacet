@@ -21,7 +21,8 @@ class CameraGrid {
   void sync();
 
   // Per-frame upload + draw. Pass the dockspace ID so windows dock here.
-  void render();
+  // `show_focus_fom` turns on every view's FoM readout + history curve.
+  void render(bool show_focus_fom = false);
 
  private:
   data::CameraStore&   store_;

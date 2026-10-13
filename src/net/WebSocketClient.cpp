@@ -6,6 +6,26 @@
 
 namespace telefacet::net {
 
+namespace {
+
+// Body of a `focus_fom_region` reply, or the `focus_fom_region` object on the
+// configure status (§4.3, §4.18). Invalid if absent or null.
+data::FocusFomRegion parseFocusFomRegion(const nlohmann::json& j) {
+  data::FocusFomRegion r;
+  if (!j.is_object()) return r;
+  r.x            = j.value("x", 0u);
+  r.y            = j.value("y", 0u);
+  r.width        = j.value("width", 0u);
+  r.height       = j.value("height", 0u);
+  r.frame_width  = j.value("frame_width", 0u);
+  r.frame_height = j.value("frame_height", 0u);
+  r.valid        = r.width > 0 && r.height > 0 && r.frame_width > 0 &&
+            r.frame_height > 0;
+  return r;
+}
+
+}  // namespace
+
 WebSocketClient::WebSocketClient(std::size_t server_index, std::string address,
                                  data::FrameBufferPool& pool, std::string sensor)
     : server_index_(server_index),
@@ -15,6 +35,10 @@ WebSocketClient::WebSocketClient(std::size_t server_index, std::string address,
       reassembler_(
           pool_,
           [this](std::shared_ptr<data::FrameBuffer> f) {
+            {
+              std::lock_guard<std::mutex> lk(meta_mu_);
+              f->focus_fom_region = focus_fom_region_;
+            }
             if (on_frame_) on_frame_(server_index_, std::move(f));
           }) {
   ws_.setUrl(address_);
@@ -120,10 +144,18 @@ void WebSocketClient::handleText(const std::string& text) {
     // pushes on every transition and on the observer's connect/disconnect
     // (protocol §3.1). Same shape, so the stored state is simply the newest.
     const std::string state = j.value("state", std::string{});
+    const bool configured = state == "configured" || state == "running";
+    bool need_region = false;
     {
       std::lock_guard<std::mutex> lk(meta_mu_);
       server_state_ = state;
+      // The region is fixed by the configured mode: forget it in IDLE, and
+      // fetch it when we find the server configured without knowing it (e.g.
+      // after a reconnect, or when another client did the configuring).
+      if (!configured) focus_fom_region_ = {};
+      need_region = configured && !focus_fom_region_.valid;
     }
+    if (need_region) getFocusFomRegion();
     spdlog::info("[ws#{}] server state: {} ({}{})", server_index_, state,
                  j.value("cause", std::string{"query"}),
                  j.value("observer_connected", false) ? ", observer present"
@@ -159,6 +191,15 @@ void WebSocketClient::handleText(const std::string& text) {
       std::lock_guard<std::mutex> lk(meta_mu_);
       lens_position_limits_ = lpl;
     }
+  } else if (type == "focus_fom_region") {
+    const data::FocusFomRegion r = parseFocusFomRegion(j);
+    {
+      std::lock_guard<std::mutex> lk(meta_mu_);
+      focus_fom_region_ = r;
+    }
+    spdlog::info("[ws#{}] FocusFoM region: {}x{} at ({}, {}) of {}x{}",
+                 server_index_, r.width, r.height, r.x, r.y, r.frame_width,
+                 r.frame_height);
   } else if (type == "trigger_result") {
     // Asynchronous ack for trigger_capture (§4.17) — it arrives only once the
     // triggered frame(s) have actually been captured, so it is what a robot
@@ -185,6 +226,11 @@ void WebSocketClient::handleText(const std::string& text) {
                  tr.captures.size());
     if (on_trigger_) on_trigger_(server_index_, tr);
   } else if (type == "status") {
+    // The configure reply carries the FocusFoM region for the new mode.
+    if (j.contains("focus_fom_region")) {
+      std::lock_guard<std::mutex> lk(meta_mu_);
+      focus_fom_region_ = parseFocusFomRegion(j["focus_fom_region"]);
+    }
     if (on_status_)
       on_status_(server_index_, type, j.value("message", std::string{}));
   } else if (type == "error") {
@@ -300,6 +346,10 @@ bool WebSocketClient::getLensPositionLimits() {
   return sendCommand({{"cmd", proto::cmd::kGetLensPositionLimits}});
 }
 
+bool WebSocketClient::getFocusFomRegion() {
+  return sendCommand({{"cmd", proto::cmd::kGetFocusFomRegion}});
+}
+
 std::string WebSocketClient::serverState() const {
   std::lock_guard<std::mutex> lk(meta_mu_);
   return server_state_;
@@ -313,6 +363,11 @@ FrameDurationLimits WebSocketClient::frameDurationLimits() const {
 LensPositionLimits WebSocketClient::lensPositionLimits() const {
   std::lock_guard<std::mutex> lk(meta_mu_);
   return lens_position_limits_;
+}
+
+data::FocusFomRegion WebSocketClient::focusFomRegion() const {
+  std::lock_guard<std::mutex> lk(meta_mu_);
+  return focus_fom_region_;
 }
 
 TriggerResult WebSocketClient::lastTriggerResult() const {

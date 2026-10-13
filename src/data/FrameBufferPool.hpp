@@ -31,6 +31,19 @@ struct ArucoMarker {
   std::vector<std::array<float, 2>> corners;  // 4 corners, clockwise from TL
 };
 
+// The fixed block of the frame the server's libcamera IPA averages into
+// FrameBuffer::focus_fom (protocol §4.18), in full-resolution frame pixels of a
+// frame_width x frame_height frame. `valid` false until the server reports it.
+struct FocusFomRegion {
+  bool          valid        = false;
+  std::uint32_t x            = 0;
+  std::uint32_t y            = 0;
+  std::uint32_t width        = 0;
+  std::uint32_t height       = 0;
+  std::uint32_t frame_width  = 0;
+  std::uint32_t frame_height = 0;
+};
+
 struct FrameBuffer {
   std::vector<std::uint8_t> data;  // packed bytes
   std::uint32_t frame_id          = 0;
@@ -46,6 +59,11 @@ struct FrameBuffer {
   // v5 per-frame focus metadata.
   float         lens_position     = NAN;   // dioptres; NaN when unavailable
   std::uint8_t  af_state          = 0xFF;  // libcamera AfState; 0xFF if none
+  // v7 libcamera FocusFoM: contrast figure of merit, larger is sharper.
+  std::int32_t  focus_fom         = -1;    // -1 when unavailable
+  // Where focus_fom is measured. Not on the wire per frame: stamped from the
+  // owning server's last report (WebSocketClient) as the frame is delivered.
+  FocusFomRegion focus_fom_region;
   // v4 checkerboard corners (empty unless a checkerboard save mode found a board).
   std::vector<CornerSet> corner_sets;
   // v6 ArUco markers (empty unless an aruco save mode detected a marker).

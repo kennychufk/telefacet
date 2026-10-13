@@ -5,7 +5,7 @@
 // any little-endian host (the only platforms we target) the structs map
 // directly to their on-the-wire representation.
 //
-// Protocol v6 (see cherupi-v4l2/docs/websocket-protocol.md §8). The 68-byte
+// Protocol v7 (see cherupi-v4l2/docs/websocket-protocol.md §8). The 72-byte
 // ChunkHeader is a strict extension of the original v2 40-byte header — the
 // first 40 bytes are byte-identical — plus an optional variable-size detection
 // block that follows the header in the same WS message when the server's save
@@ -19,7 +19,7 @@ namespace telefacet::proto {
 
 inline constexpr std::uint32_t kChunkStartMagic = 0x4348554Eu;  // 'CHUN'
 inline constexpr std::uint32_t kChunkDataMagic  = 0x43484E4Bu;  // 'CHNK'
-inline constexpr std::uint32_t kChunkVersion    = 6u;
+inline constexpr std::uint32_t kChunkVersion    = 7u;
 
 // ChunkHeader.detection_kind (offset 65) — classifies the detection block (if
 // any) that follows the header and how to parse each of its num_corner_sets
@@ -36,9 +36,9 @@ struct ChunkStartMarker {
   std::uint32_t version;
 } __attribute__((packed));
 
-// 68 bytes. Fields 0..36 match the legacy v2 layout exactly; everything from
-// timestamp_us onward was added across v3 (timing), v4 (corner block) and v5
-// (per-frame focus metadata).
+// 72 bytes. Fields 0..36 match the legacy v2 layout exactly; everything from
+// timestamp_us onward was added across v3 (timing), v4 (corner block), v5
+// (per-frame focus metadata), v6 (detection kind) and v7 (focus FoM).
 struct ChunkHeader {
   std::uint32_t frame_uuid;         //  0
   std::uint32_t frame_id;           //  4
@@ -59,9 +59,10 @@ struct ChunkHeader {
   std::uint8_t  af_state;           // 64  libcamera AfState; 0xFF if none (v5)
   std::uint8_t  detection_kind;     // 65  DetectionKind: 0=none/1=cb/2=aruco (v6)
   std::uint8_t  reserved2[2];       // 66  padding; always 0
+  std::int32_t  focus_fom;          // 68  libcamera FocusFoM; -1 if none (v7)
 } __attribute__((packed));
 
-static_assert(sizeof(ChunkHeader) == 68, "ChunkHeader must stay 68 bytes");
+static_assert(sizeof(ChunkHeader) == 72, "ChunkHeader must stay 72 bytes");
 
 // 4 bytes — header for one set of checkerboard corners inside the detection
 // block (detection_kind == 1). Followed by num_corners × { float x; float y; }
@@ -97,7 +98,7 @@ struct ChunkData {
 // corner_block_size bytes may follow in the same message, so the total is
 // kChunkStartMinSize + ChunkHeader::corner_block_size.
 inline constexpr std::size_t kChunkStartMinSize =
-    sizeof(ChunkStartMarker) + sizeof(ChunkHeader);  // 76 bytes
+    sizeof(ChunkStartMarker) + sizeof(ChunkHeader);  // 80 bytes
 inline constexpr std::size_t kChunkDataHeaderSize = sizeof(ChunkData);  // 16
 
 // JSON command names accepted by the server (cherupi-v4l2 types.hpp Protocol).
@@ -121,6 +122,8 @@ inline constexpr const char* kSetExposureTime        = "set_exposure_time";
 inline constexpr const char* kSetFrameDuration       = "set_frame_duration";
 inline constexpr const char* kGetFrameDurationLimits = "get_frame_duration_limits";
 inline constexpr const char* kGetLensPositionLimits  = "get_lens_position_limits";
+// The fixed region averaged into ChunkHeader.focus_fom (§4.18).
+inline constexpr const char* kGetFocusFomRegion      = "get_focus_fom_region";
 }  // namespace cmd
 
 }  // namespace telefacet::proto

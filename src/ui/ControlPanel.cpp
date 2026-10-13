@@ -327,6 +327,10 @@ void ControlPanel::drawOptions(const Agg& agg) {
   ImGui::SameLine();
   if (ImGui::Button("Reset frame counts")) msm_.resetFrameCountsAll();
   ImGui::EndDisabled();
+  ImGui::Checkbox("Focus FoM", &show_focus_fom_);
+  ImGui::SetItemTooltip(
+      "Show each camera's libcamera FocusFoM (sharpness over the outlined\n"
+      "central region; larger is sharper) and a curve of the last 80 frames.");
 }
 
 void ControlPanel::drawExposure(const Agg& agg) {

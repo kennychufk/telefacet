@@ -157,6 +157,7 @@ void ChunkReassembler::handleStart(const std::uint8_t* data, std::size_t len) {
   const float         lens_position     = hdr.lens_position;
   const std::uint8_t  af_state          = hdr.af_state;
   const std::uint8_t  detection_kind    = hdr.detection_kind;
+  const std::int32_t  focus_fom         = hdr.focus_fom;
 
   // The start message carries the header plus an optional detection block. Its
   // byte size is corner_block_size regardless of detection_kind, so the length
@@ -196,6 +197,8 @@ void ChunkReassembler::handleStart(const std::uint8_t* data, std::size_t len) {
     b.frame_duration_us = frame_duration_us;
     b.lens_position     = lens_position;
     b.af_state          = af_state;
+    b.focus_fom         = focus_fom;
+    b.focus_fom_region  = {};  // stamped by the owning WebSocketClient
     b.corner_sets       = corner_sets;
     b.aruco_markers     = aruco_markers;
   };

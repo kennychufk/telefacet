@@ -123,7 +123,7 @@ int App::run() {
 
     renderDockSpace();
     panel_->draw();
-    grid_->render();
+    grid_->render(panel_->showFocusFom());
 
     ImGui::Render();
     int fb_w, fb_h;

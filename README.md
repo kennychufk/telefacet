@@ -1,7 +1,7 @@
 # telefacet
 
 Native C++ / OpenGL replacement for the `telefacet-web` Vue client. Connects
-to one or more `cherupi-v4l2` WebSocket servers (WebSocket protocol v6),
+to one or more `cherupi-v4l2` WebSocket servers (WebSocket protocol v7),
 converts the YUV420 frames delivered by the server's hardware ISP to RGB on
 the GPU, and renders them in a dockable multi-camera view. Detector process modes
 (`checkerboard` / `checkerboard2x2` / `aruco` / `aruco2x2`) overlay their
@@ -10,6 +10,14 @@ ArUco/AprilTag markers as amber quads with corner dots and id labels. The
 `trigger` process mode adds a save-on-demand shutter: nothing is written to disk
 until the control panel's **Trigger capture** button (or, headlessly,
 `Client::triggerCapture()`) asks for a frame.
+
+Hovering a camera view shows that frame's lens position (dioptres) and AF
+state. The **Focus FoM** checkbox (Options, off by default) adds each view's
+libcamera `FocusFoM` sharpness score with a curve of its last 80 values,
+centred on the frame, and outlines on hover the fixed central region the
+server's IPA averages it over.
+It works in header-only mode too, so a focus sweep can be watched without
+streaming pixels.
 
 ## Build (Linux)
 

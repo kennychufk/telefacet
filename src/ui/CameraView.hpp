@@ -5,6 +5,7 @@
 
 #include <glad/glad.h>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -32,9 +33,11 @@ class CameraView {
   void uploadIfNew();
 
   // Draw the ImGui window for this camera (image + overlays) pinned to the
-  // grid cell (x, y, w, h) in screen coords. Returns false if the window has
-  // been closed.
-  bool drawWindow(float x, float y, float w, float h);
+  // grid cell (x, y, w, h) in screen coords. `show_focus_fom` adds the FoM
+  // readout + history curve and the FoM-region outline. Returns false if the
+  // window has been closed.
+  bool drawWindow(float x, float y, float w, float h,
+                  bool show_focus_fom = false);
 
  private:
   void ensureFbo(int w, int h);
@@ -67,11 +70,21 @@ class CameraView {
   bool          header_only_ = false;
   bool          have_image_  = false;
 
-  // v3/v5 per-frame metadata for the lens/AF + corner overlays.
+  // v3/v5/v7 per-frame metadata for the lens/AF/FoM + corner overlays.
   std::uint64_t timestamp_us_      = 0;
   std::uint32_t frame_duration_us_ = 0;
   float         lens_position_     = NAN;
   std::uint8_t  af_state_          = 0xFF;
+  std::int32_t  focus_fom_         = -1;
+  data::FocusFomRegion focus_fom_region_;
+
+  // The kFomHistory most recent FoM values (frames without one are skipped),
+  // kept whether or not the FoM display is on so the curve is full the moment
+  // it is switched on. Ring buffer: once full, the oldest is at fom_head_.
+  static constexpr int kFomHistory = 80;
+  std::array<float, kFomHistory> fom_hist_{};
+  int fom_len_  = 0;
+  int fom_head_ = 0;  // next write slot
   std::vector<data::CornerSet> corner_sets_;
   std::vector<data::ArucoMarker> aruco_markers_;
 };

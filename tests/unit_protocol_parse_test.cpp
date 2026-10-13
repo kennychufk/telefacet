@@ -40,7 +40,8 @@ void appendXY(std::vector<std::uint8_t>& out, float x, float y) {
 std::vector<std::uint8_t> buildStart(std::uint32_t version,
                                      std::uint8_t detection_kind,
                                      std::uint16_t num_sets,
-                                     const std::vector<std::uint8_t>& block) {
+                                     const std::vector<std::uint8_t>& block,
+                                     std::int32_t focus_fom = -1) {
   proto::ChunkStartMarker marker{};
   marker.magic = proto::kChunkStartMagic;
   marker.version = version;
@@ -58,6 +59,7 @@ std::vector<std::uint8_t> buildStart(std::uint32_t version,
   hdr.corner_block_size = static_cast<std::uint32_t>(block.size());
   hdr.num_corner_sets = num_sets;
   hdr.detection_kind = detection_kind;
+  hdr.focus_fom = focus_fom;
 
   std::vector<std::uint8_t> out;
   appendPod(out, marker);
@@ -104,7 +106,7 @@ TEST(ProtocolParse, ArucoMarkerBlockParses) {
   appendXY(block, 140, 150);
   appendXY(block, 100, 150);
 
-  auto f = parseOne(buildStart(6, /*aruco*/ 2, /*num_sets*/ 2, block));
+  auto f = parseOne(buildStart(7, /*aruco*/ 2, /*num_sets*/ 2, block));
   ASSERT_TRUE(f);
   EXPECT_TRUE(f->corner_sets.empty());
   ASSERT_EQ(f->aruco_markers.size(), 2u);
@@ -133,7 +135,7 @@ TEST(ProtocolParse, CheckerboardBlockStillParses) {
   appendXY(block, 3, 4);
   appendXY(block, 5, 6);
 
-  auto f = parseOne(buildStart(6, /*checkerboard*/ 1, /*num_sets*/ 1, block));
+  auto f = parseOne(buildStart(7, /*checkerboard*/ 1, /*num_sets*/ 1, block));
   ASSERT_TRUE(f);
   EXPECT_TRUE(f->aruco_markers.empty());
   ASSERT_EQ(f->corner_sets.size(), 1u);
@@ -142,19 +144,31 @@ TEST(ProtocolParse, CheckerboardBlockStillParses) {
 }
 
 TEST(ProtocolParse, NoDetectionLeavesBothEmpty) {
-  auto f = parseOne(buildStart(6, /*none*/ 0, /*num_sets*/ 0, {}));
+  auto f = parseOne(buildStart(7, /*none*/ 0, /*num_sets*/ 0, {}));
   ASSERT_TRUE(f);
   EXPECT_TRUE(f->corner_sets.empty());
   EXPECT_TRUE(f->aruco_markers.empty());
 }
 
-TEST(ProtocolParse, VersionGateRejectsV5) {
-  // A v5 frame must be dropped (no callback) now that the client is v6-only.
-  auto f = parseOne(buildStart(5, /*none*/ 0, /*num_sets*/ 0, {}));
+TEST(ProtocolParse, VersionGateRejectsV6) {
+  // A v6 frame must be dropped (no callback) now that the client is v7-only.
+  auto f = parseOne(buildStart(6, /*none*/ 0, /*num_sets*/ 0, {}));
   EXPECT_FALSE(f);
 }
 
-TEST(ProtocolParse, VersionGateAcceptsV6) {
-  auto f = parseOne(buildStart(6, /*none*/ 0, /*num_sets*/ 0, {}));
+TEST(ProtocolParse, VersionGateAcceptsV7) {
+  auto f = parseOne(buildStart(7, /*none*/ 0, /*num_sets*/ 0, {}));
   EXPECT_TRUE(f);
+}
+
+TEST(ProtocolParse, FocusFomIsParsed) {
+  auto f = parseOne(buildStart(7, /*none*/ 0, /*num_sets*/ 0, {}, 98765));
+  ASSERT_TRUE(f);
+  EXPECT_EQ(f->focus_fom, 98765);
+  // The region is not on the wire; the owning WebSocketClient stamps it.
+  EXPECT_FALSE(f->focus_fom_region.valid);
+
+  auto none = parseOne(buildStart(7, /*none*/ 0, /*num_sets*/ 0, {}));
+  ASSERT_TRUE(none);
+  EXPECT_EQ(none->focus_fom, -1);
 }

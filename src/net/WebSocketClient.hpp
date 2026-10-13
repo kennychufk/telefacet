@@ -141,6 +141,10 @@ class WebSocketClient {
   bool setFrameDuration(std::int64_t frame_duration_us);
   bool getFrameDurationLimits();
   bool getLensPositionLimits();
+  // Ask for the region averaged into focus_fom (§4.18). Sent automatically
+  // whenever the server is CONFIGURED/RUNNING and no region is known yet; the
+  // configure reply also carries it.
+  bool getFocusFomRegion();
 
   bool headerOnlyMode() const { return header_only_.load(); }
 
@@ -148,6 +152,9 @@ class WebSocketClient {
   std::string serverState() const;
   FrameDurationLimits frameDurationLimits() const;
   LensPositionLimits  lensPositionLimits() const;
+  // Last reported FocusFoM region (`valid` false while IDLE / unknown). Also
+  // stamped on every delivered FrameBuffer.
+  data::FocusFomRegion focusFomRegion() const;
   // Most recent `trigger_result` from this server (`valid` false until one
   // arrives). Polling this is the simplest way for a UI to show the outcome.
   TriggerResult       lastTriggerResult() const;
@@ -174,6 +181,7 @@ class WebSocketClient {
   std::string                  server_state_;
   FrameDurationLimits          frame_duration_limits_;
   LensPositionLimits           lens_position_limits_;
+  data::FocusFomRegion         focus_fom_region_;
   TriggerResult                last_trigger_result_;
 
   FrameCallback         on_frame_;

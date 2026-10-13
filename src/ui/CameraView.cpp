@@ -2,6 +2,8 @@
 
 #include <imgui.h>
 
+#include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 
@@ -84,6 +86,13 @@ void CameraView::uploadIfNew() {
   frame_duration_us_ = frame->frame_duration_us;
   lens_position_     = frame->lens_position;
   af_state_          = frame->af_state;
+  focus_fom_         = frame->focus_fom;
+  focus_fom_region_  = frame->focus_fom_region;
+  if (focus_fom_ >= 0) {
+    fom_hist_[fom_head_] = static_cast<float>(focus_fom_);
+    fom_head_ = (fom_head_ + 1) % kFomHistory;
+    if (fom_len_ < kFomHistory) ++fom_len_;
+  }
   corner_sets_       = frame->corner_sets;
   aruco_markers_     = frame->aruco_markers;
 
@@ -143,7 +152,33 @@ static ImU32 afStateColor(std::uint8_t s) {
   }
 }
 
-bool CameraView::drawWindow(float x, float y, float w, float h) {
+// FoM history as a polyline inside [p0, p1], autoscaled to its own min..max
+// (a flat history draws at mid-height). `offset` is the oldest sample's slot;
+// the x axis always spans `cap` samples.
+static void drawFomCurve(ImDrawList* dl, ImVec2 p0, ImVec2 p1,
+                         const float* hist, int len, int offset, int cap,
+                         ImU32 col) {
+  if (len < 2) return;
+  float lo = hist[offset], hi = hist[offset];
+  for (int i = 0; i < len; ++i) {
+    const float v = hist[(offset + i) % cap];
+    lo = std::min(lo, v);
+    hi = std::max(hi, v);
+  }
+  ImVec2 pts[128];
+  const int n = std::min(len, 128);
+  for (int i = 0; i < n; ++i) {
+    const float v = hist[(offset + len - n + i) % cap];
+    const float t = hi > lo ? (v - lo) / (hi - lo) : 0.5f;
+    // Newest sample on the right edge, so a short history grows leftwards.
+    pts[i] = ImVec2(p0.x + (p1.x - p0.x) * (cap - n + i) / (cap - 1),
+                    p1.y - (p1.y - p0.y) * t);
+  }
+  dl->AddPolyline(pts, n, col, ImDrawFlags_None, 1.5f);
+}
+
+bool CameraView::drawWindow(float x, float y, float w, float h,
+                            bool show_focus_fom) {
   auto* info = store_.find(global_id_);
   const std::string title =
       (info ? info->label : ("cam" + std::to_string(global_id_))) +
@@ -191,7 +226,26 @@ bool CameraView::drawWindow(float x, float y, float w, float h) {
       ImGui::Text("frames_saved");
       ImGui::TableNextColumn();
       ImGui::Text("%u", fsv);
+      if (show_focus_fom) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::Text("focus FoM");
+        ImGui::TableNextColumn();
+        if (focus_fom_ >= 0)
+          ImGui::Text("%d", focus_fom_);
+        else
+          ImGui::TextUnformatted("--");
+      }
       ImGui::EndTable();
+    }
+    if (show_focus_fom && fom_len_ >= 2) {
+      // Fill the rest of the tile (at least 64 px tall).
+      const float plot_h =
+          std::max(64.0f, ImGui::GetContentRegionAvail().y - 4.0f);
+      const int oldest = fom_len_ < kFomHistory ? 0 : fom_head_;
+      ImGui::PlotLines("##fom", fom_hist_.data(), fom_len_, oldest,
+                       "FoM, last 80 frames", FLT_MAX, FLT_MAX,
+                       ImVec2(-1.0f, plot_h));
     }
   } else {
     // Image area: letterbox to preserve aspect ratio.
@@ -286,6 +340,46 @@ bool CameraView::drawWindow(float x, float y, float w, float h) {
     dl->AddText(ImVec2(cursor.x + 8, cursor.y + avail.y - 36), blue, buf);
     std::snprintf(buf, sizeof(buf), "saved %u", fsv);
     dl->AddText(ImVec2(cursor.x + 8, cursor.y + avail.y - 18), orange, buf);
+
+    // FocusFoM region (hover only): the fixed block the server's IPA
+    // averages into focus_fom. Reported in full-resolution frame pixels, so
+    // map through frame_width/height, which also covers subsampled streams.
+    const auto& rg = focus_fom_region_;
+    if (show_focus_fom && hovered && rg.valid) {
+      const float rx = disp.x / static_cast<float>(rg.frame_width);
+      const float ry = disp.y / static_cast<float>(rg.frame_height);
+      const ImVec2 p0(img_origin.x + rg.x * rx, img_origin.y + rg.y * ry);
+      const ImVec2 p1(img_origin.x + (rg.x + rg.width) * rx,
+                      img_origin.y + (rg.y + rg.height) * ry);
+      dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 140), 0.0f, 0, 1.0f);
+    }
+
+    // FoM readout + history curve, centred on the rendered frame (the
+    // letterboxed image rect) and 45 % of its displayed width, on whenever
+    // the FoM display is: a focus sweep is watched, not hovered.
+    if (show_focus_fom) {
+      char fbuf[24];
+      if (focus_fom_ < 0)
+        std::snprintf(fbuf, sizeof(fbuf), "FoM --");
+      else
+        std::snprintf(fbuf, sizeof(fbuf), "FoM %d", focus_fom_);
+      const ImVec2 fsz = ImGui::CalcTextSize(fbuf);
+      const float  pad = 8.0f;
+      const float  cw  = disp.x * 0.45f;                       // curve width
+      const float  ch  = std::min(cw / 3.0f, disp.y * 0.35f);  // curve height
+      const ImVec2 centre(img_origin.x + disp.x * 0.5f,
+                          img_origin.y + disp.y * 0.5f);
+      const float  bw = cw + 2 * pad;
+      const float  bh = fsz.y + 4.0f + ch + 2 * pad;
+      const ImVec2 box0(centre.x - bw * 0.5f, centre.y - bh * 0.5f);
+      const ImVec2 box1(box0.x + bw, box0.y + bh);
+      dl->AddRectFilled(box0, box1, IM_COL32(0, 0, 0, 100), 4.0f);
+      dl->AddText(ImVec2(box0.x + pad, box0.y + pad), white, fbuf);
+      const ImVec2 c0(box0.x + pad, box0.y + pad + fsz.y + 4.0f);
+      const int oldest = fom_len_ < kFomHistory ? 0 : fom_head_;
+      drawFomCurve(dl, c0, ImVec2(c0.x + cw, c0.y + ch), fom_hist_.data(),
+                   fom_len_, oldest, kFomHistory, green);
+    }
 
     // Lens / AF hover overlay (bottom-right). Hidden when both are absent.
     if (hovered && !(std::isnan(lens_position_) && af_state_ == 0xFF)) {

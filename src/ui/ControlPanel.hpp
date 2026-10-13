@@ -27,6 +27,8 @@ class ControlPanel {
   void draw();
 
   bool visible() const { return visible_; }
+  // Client-side display option: per-view FoM readout + history curve.
+  bool showFocusFom() const { return show_focus_fom_; }
   void toggle()        { visible_ = !visible_; }
 
   // Aggregate pipeline stage across the connected servers (mirrors the web
@@ -71,6 +73,7 @@ class ControlPanel {
   net::MultiServerManager&  msm_;
   bool                      visible_ = true;
   bool                      header_only_ = false;
+  bool                      show_focus_fom_ = false;
   int                       save_mode_idx_ = 0;
 
   // Live-editable save params (seeded from config in the ctor).
