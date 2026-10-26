@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -41,7 +42,9 @@ std::vector<std::uint8_t> buildStart(std::uint32_t version,
                                      std::uint8_t detection_kind,
                                      std::uint16_t num_sets,
                                      const std::vector<std::uint8_t>& block,
-                                     std::int32_t focus_fom = -1) {
+                                     std::int32_t focus_fom = -1,
+                                     std::uint8_t frame_kind = 0,
+                                     std::uint16_t capture_id = 0) {
   proto::ChunkStartMarker marker{};
   marker.magic = proto::kChunkStartMagic;
   marker.version = version;
@@ -60,6 +63,8 @@ std::vector<std::uint8_t> buildStart(std::uint32_t version,
   hdr.num_corner_sets = num_sets;
   hdr.detection_kind = detection_kind;
   hdr.focus_fom = focus_fom;
+  hdr.frame_kind = frame_kind;
+  hdr.capture_id = capture_id;
 
   std::vector<std::uint8_t> out;
   appendPod(out, marker);
@@ -106,7 +111,7 @@ TEST(ProtocolParse, ArucoMarkerBlockParses) {
   appendXY(block, 140, 150);
   appendXY(block, 100, 150);
 
-  auto f = parseOne(buildStart(7, /*aruco*/ 2, /*num_sets*/ 2, block));
+  auto f = parseOne(buildStart(8, /*aruco*/ 2, /*num_sets*/ 2, block));
   ASSERT_TRUE(f);
   EXPECT_TRUE(f->corner_sets.empty());
   ASSERT_EQ(f->aruco_markers.size(), 2u);
@@ -135,7 +140,7 @@ TEST(ProtocolParse, CheckerboardBlockStillParses) {
   appendXY(block, 3, 4);
   appendXY(block, 5, 6);
 
-  auto f = parseOne(buildStart(7, /*checkerboard*/ 1, /*num_sets*/ 1, block));
+  auto f = parseOne(buildStart(8, /*checkerboard*/ 1, /*num_sets*/ 1, block));
   ASSERT_TRUE(f);
   EXPECT_TRUE(f->aruco_markers.empty());
   ASSERT_EQ(f->corner_sets.size(), 1u);
@@ -144,31 +149,113 @@ TEST(ProtocolParse, CheckerboardBlockStillParses) {
 }
 
 TEST(ProtocolParse, NoDetectionLeavesBothEmpty) {
-  auto f = parseOne(buildStart(7, /*none*/ 0, /*num_sets*/ 0, {}));
+  auto f = parseOne(buildStart(8, /*none*/ 0, /*num_sets*/ 0, {}));
   ASSERT_TRUE(f);
   EXPECT_TRUE(f->corner_sets.empty());
   EXPECT_TRUE(f->aruco_markers.empty());
 }
 
-TEST(ProtocolParse, VersionGateRejectsV6) {
-  // A v6 frame must be dropped (no callback) now that the client is v7-only.
-  auto f = parseOne(buildStart(6, /*none*/ 0, /*num_sets*/ 0, {}));
+TEST(ProtocolParse, VersionGateRejectsV7) {
+  // A v7 frame must be dropped (no callback) now that the client is v8-only:
+  // offset 58 meant `reserved` there, and frame_kind 1 meant a `stack` mode.
+  auto f = parseOne(buildStart(7, /*none*/ 0, /*num_sets*/ 0, {}));
   EXPECT_FALSE(f);
 }
 
-TEST(ProtocolParse, VersionGateAcceptsV7) {
-  auto f = parseOne(buildStart(7, /*none*/ 0, /*num_sets*/ 0, {}));
+TEST(ProtocolParse, VersionGateAcceptsV8) {
+  auto f = parseOne(buildStart(8, /*none*/ 0, /*num_sets*/ 0, {}));
   EXPECT_TRUE(f);
 }
 
+TEST(ProtocolParse, HeaderLayoutMatchesV8Offsets) {
+  // §5.3: capture_id at 58, frame_kind at 66, focus_fom at 68.
+  EXPECT_EQ(offsetof(proto::ChunkHeader, capture_id), 58u);
+  EXPECT_EQ(offsetof(proto::ChunkHeader, frame_kind), 66u);
+  EXPECT_EQ(offsetof(proto::ChunkHeader, focus_fom), 68u);
+}
+
+TEST(ProtocolParse, LiveFrameHasNoCaptureId) {
+  auto f = parseOne(buildStart(8, /*none*/ 0, /*num_sets*/ 0, {}));
+  ASSERT_TRUE(f);
+  EXPECT_EQ(f->frame_kind, 0u);
+  EXPECT_EQ(f->capture_id, 0u);
+  EXPECT_EQ(f->detection_kind, 0u);
+}
+
+TEST(ProtocolParse, TriggerFrameCarriesCaptureId) {
+  // A header-only triggered frame (send_image false) with its board corners.
+  std::vector<std::uint8_t> block;
+  proto::CornerSetHeader csh{};
+  csh.flags = 0x01;
+  csh.num_corners = 1;
+  appendPod(block, csh);
+  appendXY(block, 7, 8);
+  auto f = parseOne(buildStart(8, /*checkerboard*/ 1, 1, block, 1234,
+                               /*trigger*/ 2, /*capture_id*/ 3));
+  ASSERT_TRUE(f);
+  EXPECT_TRUE(f->header_only);
+  EXPECT_EQ(f->frame_kind, 2u);
+  EXPECT_TRUE(proto::isCaptureFrameKind(f->frame_kind));
+  EXPECT_EQ(f->capture_id, 3u);
+  EXPECT_EQ(f->detection_kind, 1u);
+  ASSERT_EQ(f->corner_sets.size(), 1u);
+  EXPECT_FLOAT_EQ(f->corner_sets[0].corners[0][1], 8.0f);
+}
+
+TEST(ProtocolParse, StackFrameReassemblesFromChunks) {
+  // A 2x2 SF32 stacked image (frame_kind 1) split over two CHNK packets.
+  const std::vector<float> px = {1.0f, 2.0f, 3.0f, 4.0f};
+  std::vector<std::uint8_t> payload(px.size() * 4);
+  std::memcpy(payload.data(), px.data(), payload.size());
+
+  proto::ChunkStartMarker marker{proto::kChunkStartMagic, 8};
+  proto::ChunkHeader hdr{};
+  hdr.frame_uuid = 77;
+  hdr.frame_id = 843;
+  hdr.total_chunks = 2;
+  hdr.total_size = static_cast<std::uint32_t>(payload.size());
+  hdr.width = 2;
+  hdr.height = 2;
+  hdr.bytes_per_line = 8;
+  hdr.pixel_format = proto::kPixelFormatSF32;
+  hdr.frame_kind = 1;
+  hdr.capture_id = 9;
+  std::vector<std::uint8_t> start;
+  appendPod(start, marker);
+  appendPod(start, hdr);
+
+  FrameBufferPool pool;
+  std::shared_ptr<FrameBuffer> got;
+  ChunkReassembler reasm(pool, [&](std::shared_ptr<FrameBuffer> b) {
+    got = std::move(b);
+  });
+  reasm.onBinary(start.data(), start.size());
+  for (std::uint32_t i = 0; i < 2; ++i) {
+    proto::ChunkData cd{proto::kChunkDataMagic, 77, i, 8};
+    std::vector<std::uint8_t> msg;
+    appendPod(msg, cd);
+    msg.insert(msg.end(), payload.begin() + i * 8, payload.begin() + i * 8 + 8);
+    EXPECT_FALSE(got) << "frame emitted before its last chunk";
+    reasm.onBinary(msg.data(), msg.size());
+  }
+  ASSERT_TRUE(got);
+  EXPECT_EQ(got->frame_kind, 1u);
+  EXPECT_EQ(got->capture_id, 9u);
+  EXPECT_EQ(got->pixel_format, proto::kPixelFormatSF32);
+  ASSERT_EQ(got->data.size(), 16u);
+  float last;
+  std::memcpy(&last, got->data.data() + 12, 4);
+  EXPECT_FLOAT_EQ(last, 4.0f);
+}
+
 TEST(ProtocolParse, FocusFomIsParsed) {
-  auto f = parseOne(buildStart(7, /*none*/ 0, /*num_sets*/ 0, {}, 98765));
+  auto f = parseOne(buildStart(8, /*none*/ 0, /*num_sets*/ 0, {}, 98765));
   ASSERT_TRUE(f);
   EXPECT_EQ(f->focus_fom, 98765);
   // The region is not on the wire; the owning WebSocketClient stamps it.
   EXPECT_FALSE(f->focus_fom_region.valid);
 
-  auto none = parseOne(buildStart(7, /*none*/ 0, /*num_sets*/ 0, {}));
+  auto none = parseOne(buildStart(8, /*none*/ 0, /*num_sets*/ 0, {}));
   ASSERT_TRUE(none);
   EXPECT_EQ(none->focus_fom, -1);
 }

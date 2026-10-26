@@ -54,42 +54,96 @@ struct CameraMarkers {
   std::vector<data::ArucoMarker> markers;
 };
 
-// One camera's frame kept by a triggerCapture() call.
-struct TriggerCapture {
+// One camera's capture frame, as returned by triggerCapture() / stackCapture().
+struct CapturedFrame {
   std::size_t   global_camera_id = 0;  // stable index into cameras()
   std::size_t   server_index     = 0;
   std::uint32_t local_camera_id  = 0;
   std::uint32_t frame_id         = 0;
-  // Path *on the server host* that the frame was queued to. Empty when the
-  // trigger mode is running with save_frames off.
-  std::string   filename;
+  // The frame as received, owned by the caller (it is not recycled):
+  // timestamp / focus metadata, the process mode's detection (corner_sets /
+  // aruco_markers, empty in a non-detector mode) and, unless the request had
+  // send_image false (then header_only is set and data is empty), the pixels.
+  // A trigger frame is full-resolution YUV420 and its corners are full-frame
+  // pixels. A stacked image is half-resolution 'SF32' float32 (protocol §5.5)
+  // and its corners are in its own pixels: sensor pixel = 2b + 0.5.
+  std::shared_ptr<const data::FrameBuffer> frame;
 };
 
-// Result of one triggerCapture() across every configured server.
+// trigger_capture options (protocol §4.17).
+struct TriggerOptions {
+  // Settling frames discarded per camera before the kept one (0..100).
+  // Unset ⇒ the config's processing.trigger_skip_frames.
+  std::optional<int> skip_frames;
+  // false ⇒ frames arrive header + detection only — the corners without the
+  // pixels, for a detector mode on a slow link.
+  bool send_image = true;
+};
+
+// Result of one triggerCapture() across every connected server.
 struct TriggerOutcome {
-  // Every server acked before the timeout. False ⇒ `captures` is partial and
-  // some server never reported — check that it is connected and in `trigger`
-  // mode (a rejected request answers with an `error`, never an ack).
+  // Every server acked and delivered all its frames before the timeout. False
+  // ⇒ `captures` is partial: some server refused (see `refusals`), or did not
+  // finish in time.
   bool complete  = false;
   // A server abandoned its trigger because capture stopped while it was
-  // pending; that server's cameras are missing from `captures`.
+  // pending; that server's untaken cameras are missing from `captures`.
   bool cancelled = false;
+  // "server <i>: <message>" for each server that refused the request.
+  std::vector<std::string> refusals;
   // One entry per camera that delivered a frame, sorted by global_camera_id.
-  std::vector<TriggerCapture> captures;
+  std::vector<CapturedFrame> captures;
 
   explicit operator bool() const { return complete && !cancelled; }
+};
+
+// stack_capture options (protocol §4.19). Unset ⇒ the config's
+// processing.stack_* defaults; an exposure / gain of 0 there keeps the preview's.
+struct StackOptions {
+  std::optional<int>          num_frames;        // 1..1024
+  std::optional<std::int64_t> exposure_time_us;  // pin for the stack, then restore
+  std::optional<double>       analogue_gain;     // 1..64; server: 1.0 with an exposure
+  std::optional<int>          skip_frames;       // 0..100, after settings settle
+  bool                        send_image = true;
+};
+
+// One camera's part of a stackCapture().
+struct StackedCamera {
+  std::size_t       global_camera_id = 0;
+  std::size_t       server_index     = 0;
+  std::uint32_t     local_camera_id  = 0;
+  // The server's stack_result entry: frames summed, exposure, white level...
+  // `stats.error` set ⇒ this camera failed and has no image.
+  net::StackCapture stats;
+  // The stacked image (see CapturedFrame::frame); null when the camera failed
+  // or its image did not arrive before the timeout.
+  std::shared_ptr<const data::FrameBuffer> frame;
+};
+
+struct StackOutcome {
+  bool complete  = false;  // every server reported and sent its images in time
+  bool cancelled = false;  // stop_cameras arrived mid-stack
+  std::vector<std::string>   refusals;  // e.g. "server 0: stack_capture needs the raw stream"
+  std::vector<StackedCamera> cameras;   // sorted by global_camera_id
+
+  // Complete, and every camera stacked successfully.
+  explicit operator bool() const {
+    if (!complete || cancelled) return false;
+    for (const auto& c : cameras)
+      if (!c.stats.error.empty() || !c.frame) return false;
+    return true;
+  }
 };
 
 // Options applied during start(). Defaults are tuned for pose estimation:
 // subpixel corners on, no on-disk frame saving, header-only transport (we only
 // need the corner block, not the pixels — a large bandwidth saving).
 struct ClientOptions {
-  // Server-side processing mode (protocol §4.5): none|buffer|batch|trigger|
+  // Server-side processing mode (protocol §4.5): none|buffer|batch|
   // checkerboard|checkerboard2x2|aruco|aruco2x2. The aruco_* fields below apply
   // only to the aruco modes. Use "none" with header_only=false to stream raw
   // full frames (every captured frame — "none" has no detector to gate on).
-  // Use "trigger" (with save_frames=true) to save frames only on demand, via
-  // triggerCapture() — the automated-calibration path.
+  // triggerCapture() / stackCapture() work in every mode and get its detection.
   std::string save_mode = "aruco2x2";
 
   // aruco2x2 detector params (server-side ProcessConfig).
@@ -97,9 +151,9 @@ struct ClientOptions {
   int  aruco_num_threads        = 4;      // quadrant parallelism (1..4)
   bool aruco_corner_refine      = true;   // CORNER_REFINE_SUBPIX for accuracy
 
-  // Whether the Pi writes frames to disk. Off by default (pose estimation
-  // needs no files) — but `trigger` mode is pointless without it, so set it
-  // true whenever save_mode is "trigger".
+  // Whether the Pi writes live frames to disk. Off by default (pose estimation
+  // needs no files). Captures are never saved on the Pi: triggerCapture() and
+  // stackCapture() hand their frames back instead.
   bool save_frames = false;
   bool header_only = true;   // stream header+detection block only, no pixels
 
@@ -148,22 +202,29 @@ class Client {
   // (a frame in which nothing was detected).
   std::vector<CameraMarkers> poll();
 
-  // Save one frame per camera, right now — the API behind the client's manual
-  // trigger button, and the call an automated calibration rig makes once its
-  // arm has come to a complete stop. Requires save_mode "trigger"; in any other
-  // mode the servers reject the request and this returns `complete == false`.
+  // Take one frame per running camera, right now, and return it — the API
+  // behind the GUI's Trigger button, and the call an automated calibration rig
+  // makes once its arm has come to a complete stop. Works in any process mode;
+  // each frame carries that mode's detection. Nothing is saved on the server.
   //
-  // Blocks until every configured server has acked (meaning its cameras really
-  // did deliver the triggered frame, so the arm is free to move again) or
-  // `timeout` elapses. `skip_frames` overrides the server's configured
-  // `trigger_skip_frames` — extra frames discarded per camera before the kept
-  // one, for rigs that need more settling time.
+  // Blocks until every connected server has acked and delivered its frames, or
+  // `timeout` elapses. The arm may move as soon as the frames are taken, which
+  // is a little earlier than this returns (detection and transfer follow).
   //
-  // Not reentrant: one triggerCapture() at a time per Client (the servers also
-  // reject overlapping triggers).
+  // Not reentrant: one capture (trigger or stack) at a time per Client — the
+  // servers refuse a second one until the first's frames have been sent.
   TriggerOutcome triggerCapture(
-      std::chrono::milliseconds timeout = std::chrono::milliseconds{5000},
-      std::optional<int> skip_frames = std::nullopt);
+      std::chrono::milliseconds timeout = std::chrono::milliseconds{10000},
+      const TriggerOptions& opts = {});
+
+  // Average raw frames per camera on every server configured with `raw`
+  // (ServerCfg::raw) and return the stacked images, with the process mode's
+  // detection on each — corner scatter falls as 1/sqrt(num_frames). Blocks
+  // until every such server has reported and sent its images, or `timeout`.
+  // Takes num_frames frame periods plus settling, so allow for it.
+  StackOutcome stackCapture(
+      std::chrono::milliseconds timeout = std::chrono::milliseconds{60000},
+      const StackOptions& opts = {});
 
   // Escape hatches for advanced callers (per-camera lens/exposure, stats, ...).
   data::CameraStore&       store()   { return store_; }
@@ -181,14 +242,43 @@ class Client {
   std::unordered_map<std::size_t, std::uint64_t> seen_seq_;  // per-camera cursor
   bool started_ = false;
 
-  // triggerCapture() rendezvous. Acks land on the WebSocket receive threads
-  // (one per server) and are collected here until every armed server reported.
-  mutable std::mutex      trigger_mu_;
-  std::condition_variable trigger_cv_;
-  // {server_index, ack}; the index is what maps a server-local camera id back
-  // onto the global roster. Guarded by trigger_mu_.
-  std::vector<std::pair<std::size_t, net::TriggerResult>> trigger_acks_;
-  std::size_t             trigger_expected_ = 0;  // servers armed by the call
+  // Capture rendezvous. Results, refusals and frames land on the WebSocket
+  // receive threads (one per server) and are collected here until every
+  // armed server has finished. Guarded by capture_mu_.
+  struct PendingServer {
+    bool          done     = false;
+    bool          acked    = false;
+    std::uint32_t id       = 0;  // trigger_id / stack_id
+    std::size_t   expected = 0;  // frames announced by the result
+    std::string   refusal;
+    net::TriggerResult trigger;
+    net::StackResult   stack;
+    std::vector<std::shared_ptr<const data::FrameBuffer>> frames;
+  };
+  // Run one capture: wait out any earlier capture still in flight, arm the
+  // rendezvous, `send` the request (returning the servers it reached), and
+  // wait until each of them finished. Returns false on timeout or when
+  // nothing could be sent; `out` holds whatever arrived, by server, and
+  // `refusals` any reason it could not start.
+  bool runCapture(net::CaptureKind kind,
+                  const std::function<std::vector<std::size_t>()>& send,
+                  std::chrono::milliseconds timeout,
+                  std::unordered_map<std::size_t, PendingServer>& out,
+                  std::vector<std::string>& refusals);
+  // Receive-thread hooks feeding the rendezvous.
+  void onCaptureResult(std::size_t server, net::CaptureKind kind,
+                       std::uint32_t id, std::size_t expected,
+                       const net::TriggerResult* tr, const net::StackResult* sr);
+  void onCaptureRefused(std::size_t server, net::CaptureKind kind,
+                        const std::string& message);
+  void onCaptureFrame(std::size_t server,
+                      std::shared_ptr<const data::FrameBuffer> frame);
+
+  mutable std::mutex      capture_mu_;
+  std::condition_variable capture_cv_;
+  bool                    capture_active_ = false;
+  net::CaptureKind        capture_kind_   = net::CaptureKind::Trigger;
+  std::unordered_map<std::size_t, PendingServer> capture_pending_;  // by server
 };
 
 }  // namespace telefacet::client

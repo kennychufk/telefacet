@@ -25,7 +25,7 @@ class ChunkReassembler {
   // network thread (per-connection only).
   void onBinary(const void* data, std::size_t len);
 
-  // Drop in-flight buffers older than `timeout`.
+  // Drop in-flight buffers that have received nothing for `timeout`.
   void sweepStale(std::chrono::milliseconds timeout);
 
   // Wipe all in-flight buffers (e.g. on disconnect).
@@ -40,7 +40,12 @@ class ChunkReassembler {
     // One byte vector per chunk index, populated as chunks arrive. We
     // concatenate in order on completion (matches the JS reassembler).
     std::vector<std::vector<std::uint8_t>> chunks;
-    std::chrono::steady_clock::time_point started =
+    // Last sign of progress (the start message, then each chunk). A frame is
+    // stale only once its chunks stop coming: a 12 MB stacked image on a slow
+    // link legitimately takes longer than the timeout as a whole, and the
+    // server sends a capture frame exactly once, so dropping it while it is
+    // still arriving would lose it for good.
+    std::chrono::steady_clock::time_point last_chunk =
         std::chrono::steady_clock::now();
   };
 

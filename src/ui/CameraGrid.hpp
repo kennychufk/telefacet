@@ -20,9 +20,9 @@ class CameraGrid {
   // call every frame.
   void sync();
 
-  // Per-frame upload + draw. Pass the dockspace ID so windows dock here.
-  // `show_focus_fom` turns on every view's FoM readout + history curve.
-  void render(bool show_focus_fom = false);
+  // Per-frame upload + draw, with the display options every tile shares
+  // (FoM readout, live vs capture view, capture overlay).
+  void render(const ViewOptions& opts = {});
 
  private:
   data::CameraStore&   store_;

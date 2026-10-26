@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <nlohmann/json.hpp>
+
+#include "net/Protocol.hpp"
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -14,15 +16,27 @@ using namespace std::chrono_literals;
 
 Client::Client(config::Config cfg) : cfg_(std::move(cfg)) {
   msm_ = std::make_unique<net::MultiServerManager>(store_, cfg_);
-  // Collect trigger acks as they arrive (one per server, each on that server's
-  // receive thread) so triggerCapture() can block until all of them landed.
-  msm_->setOnTriggerResult(
-      [this](std::size_t server_index, const net::TriggerResult& tr) {
-        {
-          std::lock_guard<std::mutex> lk(trigger_mu_);
-          trigger_acks_.emplace_back(server_index, tr);
-        }
-        trigger_cv_.notify_all();
+  // Collect capture results, refusals and frames as they arrive (each on its
+  // server's receive thread) so a capture call can block until all landed.
+  msm_->setOnTriggerResult([this](std::size_t i, const net::TriggerResult& tr) {
+    onCaptureResult(i, net::CaptureKind::Trigger, tr.trigger_id,
+                    tr.captures.size(), &tr, nullptr);
+  });
+  msm_->setOnStackResult([this](std::size_t i, const net::StackResult& sr) {
+    std::size_t images = 0;
+    for (const auto& c : sr.captures)
+      if (c.error.empty()) ++images;
+    onCaptureResult(i, net::CaptureKind::Stack, sr.stack_id, images, nullptr,
+                    &sr);
+  });
+  msm_->setOnCaptureRefused(
+      [this](std::size_t i, net::CaptureKind kind, const std::string& msg) {
+        onCaptureRefused(i, kind, msg);
+      });
+  msm_->setOnCaptureFrame(
+      [this](std::size_t i, std::optional<std::size_t>,
+             const net::CaptureFrame& cf, std::shared_ptr<const data::Capture>) {
+        onCaptureFrame(i, cf.frame);
       });
 }
 
@@ -160,62 +174,197 @@ bool Client::latest(std::size_t global_camera_id, CameraMarkers& out) {
   return true;
 }
 
+void Client::onCaptureResult(std::size_t server, net::CaptureKind kind,
+                             std::uint32_t id, std::size_t expected,
+                             const net::TriggerResult* tr,
+                             const net::StackResult* sr) {
+  {
+    std::lock_guard<std::mutex> lk(capture_mu_);
+    auto it = capture_pending_.find(server);
+    if (!capture_active_ || kind != capture_kind_ ||
+        it == capture_pending_.end() || it->second.acked)
+      return;
+    auto& p = it->second;
+    p.acked    = true;
+    p.id       = id;
+    p.expected = expected;
+    if (tr) p.trigger = *tr;
+    if (sr) p.stack = *sr;
+    p.done = expected == 0;
+  }
+  capture_cv_.notify_all();
+}
+
+void Client::onCaptureRefused(std::size_t server, net::CaptureKind kind,
+                              const std::string& message) {
+  {
+    std::lock_guard<std::mutex> lk(capture_mu_);
+    auto it = capture_pending_.find(server);
+    if (!capture_active_ || kind != capture_kind_ ||
+        it == capture_pending_.end() || it->second.acked)
+      return;
+    it->second.refusal = message;
+    it->second.done    = true;
+  }
+  capture_cv_.notify_all();
+}
+
+void Client::onCaptureFrame(std::size_t server,
+                            std::shared_ptr<const data::FrameBuffer> frame) {
+  const auto kind =
+      frame->frame_kind == static_cast<std::uint8_t>(proto::FrameKind::Stack)
+          ? net::CaptureKind::Stack
+          : net::CaptureKind::Trigger;
+  {
+    std::lock_guard<std::mutex> lk(capture_mu_);
+    auto it = capture_pending_.find(server);
+    if (!capture_active_ || kind != capture_kind_ ||
+        it == capture_pending_.end() || !it->second.acked || it->second.done)
+      return;
+    auto& p = it->second;
+    if (frame->capture_id != static_cast<std::uint16_t>(p.id)) return;
+    p.frames.push_back(std::move(frame));
+    p.done = p.frames.size() >= p.expected;
+  }
+  capture_cv_.notify_all();
+}
+
+bool Client::runCapture(net::CaptureKind kind,
+                        const std::function<std::vector<std::size_t>()>& send,
+                        std::chrono::milliseconds timeout,
+                        std::unordered_map<std::size_t, PendingServer>& out,
+                        std::vector<std::string>& refusals) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  // A capture still in flight (a previous call that timed out, or the other
+  // kind) would make the servers refuse this one, and a late result of it
+  // could be taken for this one's; let it finish first.
+  if (!waitUntil([&] { return !msm_->anyCaptureInProgress(); }, timeout)) {
+    refusals.push_back("an earlier capture is still in progress");
+    return false;
+  }
+
+  // Arm for every connected server before sending: a result can follow the
+  // request faster than this thread returns from send().
+  {
+    std::lock_guard<std::mutex> lk(capture_mu_);
+    capture_pending_.clear();
+    for (std::size_t i = 0; i < msm_->serverCount(); ++i)
+      if (msm_->serverConnected(i)) capture_pending_[i] = PendingServer{};
+    capture_kind_   = kind;
+    capture_active_ = true;
+  }
+  const std::vector<std::size_t> sent = send();
+
+  bool finished = false;
+  {
+    std::unique_lock<std::mutex> lk(capture_mu_);
+    for (auto it = capture_pending_.begin(); it != capture_pending_.end();) {
+      if (std::find(sent.begin(), sent.end(), it->first) == sent.end())
+        it = capture_pending_.erase(it);
+      else
+        ++it;
+    }
+    if (!capture_pending_.empty()) {
+      finished = capture_cv_.wait_until(lk, deadline, [&] {
+        for (const auto& [_, p] : capture_pending_)
+          if (!p.done) return false;
+        return true;
+      });
+    }
+    out = std::move(capture_pending_);
+    capture_pending_.clear();
+    capture_active_ = false;
+  }
+  if (sent.empty()) {
+    refusals.push_back("the request reached no connected server");
+    return false;
+  }
+  for (const auto& [server, p] : out) {
+    if (!p.refusal.empty())
+      refusals.push_back("server " + std::to_string(server) + ": " + p.refusal);
+    else if (!p.done)
+      spdlog::warn("telefacet::client: server {} {} — {}/{} frame(s) in time",
+                   server, p.acked ? "acked" : "did not answer",
+                   p.frames.size(), p.expected);
+  }
+  return finished && refusals.empty();
+}
+
 TriggerOutcome Client::triggerCapture(std::chrono::milliseconds timeout,
-                                      std::optional<int> skip_frames) {
+                                      const TriggerOptions& opts) {
   TriggerOutcome out;
   if (!msm_) return out;
-
-  // Drop any ack left over from a previous (timed-out) call before arming, so
-  // a late reply can't be mistaken for this trigger's.
-  {
-    std::lock_guard<std::mutex> lk(trigger_mu_);
-    trigger_acks_.clear();
-    trigger_expected_ = 0;
-  }
-
-  const std::size_t armed = msm_->triggerCaptureAll(skip_frames);
-  if (armed == 0) {
-    spdlog::warn("telefacet::client: trigger reached no connected server");
-    return out;
-  }
-  {
-    std::lock_guard<std::mutex> lk(trigger_mu_);
-    trigger_expected_ = armed;
-  }
-
-  std::vector<std::pair<std::size_t, net::TriggerResult>> acks;
-  {
-    std::unique_lock<std::mutex> lk(trigger_mu_);
-    out.complete = trigger_cv_.wait_for(lk, timeout, [&] {
-      return trigger_acks_.size() >= trigger_expected_;
-    });
-    acks = std::move(trigger_acks_);
-    trigger_acks_.clear();
-    trigger_expected_ = 0;
-  }
-
+  const int skip = opts.skip_frames.value_or(cfg_.saving.trigger_skip_frames);
+  std::unordered_map<std::size_t, PendingServer> got;
+  out.complete = runCapture(
+      net::CaptureKind::Trigger,
+      [&] { return msm_->triggerCaptureAll(skip, opts.send_image); }, timeout,
+      got, out.refusals);
   if (!out.complete)
-    spdlog::warn("telefacet::client: trigger timed out — {}/{} server(s) acked",
-                 acks.size(), armed);
+    spdlog::warn("telefacet::client: trigger incomplete{}",
+                 out.refusals.empty() ? " (timed out)" : "");
 
-  for (const auto& [server_index, ack] : acks) {
-    if (ack.cancelled) out.cancelled = true;
-    for (const auto& cap : ack.captures) {
-      TriggerCapture tc;
-      tc.server_index    = server_index;
-      tc.local_camera_id = cap.camera_id;
-      tc.frame_id        = cap.frame_id;
-      tc.filename        = cap.filename;
+  for (const auto& [server_index, p] : got) {
+    if (p.trigger.cancelled) out.cancelled = true;
+    for (const auto& f : p.frames) {
+      CapturedFrame cf;
+      cf.server_index    = server_index;
+      cf.local_camera_id = f->camera_id;
+      cf.frame_id        = f->frame_id;
+      cf.frame           = f;
       // Map the server-local id onto the global roster the caller sees. An
       // unknown camera (discovery race) keeps global id 0 rather than dropping
-      // the capture, since the filename is still useful.
-      if (auto* info = store_.findByServer(server_index, cap.camera_id))
-        tc.global_camera_id = info->global_id;
-      out.captures.push_back(std::move(tc));
+      // the frame.
+      if (auto* info = store_.findByServer(server_index, f->camera_id))
+        cf.global_camera_id = info->global_id;
+      out.captures.push_back(std::move(cf));
     }
   }
   std::sort(out.captures.begin(), out.captures.end(),
-            [](const TriggerCapture& a, const TriggerCapture& b) {
+            [](const CapturedFrame& a, const CapturedFrame& b) {
+              return a.global_camera_id < b.global_camera_id;
+            });
+  return out;
+}
+
+StackOutcome Client::stackCapture(std::chrono::milliseconds timeout,
+                                  const StackOptions& opts) {
+  StackOutcome out;
+  if (!msm_) return out;
+  const auto& d = cfg_.saving;
+  net::StackRequest req;
+  req.num_frames  = opts.num_frames.value_or(d.stack_num_frames);
+  req.skip_frames = opts.skip_frames.value_or(d.stack_skip_frames);
+  const std::int64_t exposure = opts.exposure_time_us.value_or(d.stack_exposure_time);
+  const double gain = opts.analogue_gain.value_or(d.stack_analogue_gain);
+  if (exposure > 0) req.exposure_time_us = exposure;
+  if (gain > 0) req.analogue_gain = gain;
+  req.send_image = opts.send_image;
+
+  std::unordered_map<std::size_t, PendingServer> got;
+  out.complete = runCapture(
+      net::CaptureKind::Stack, [&] { return msm_->stackCaptureAll(req); },
+      timeout, got, out.refusals);
+  if (!out.complete)
+    spdlog::warn("telefacet::client: stack incomplete{}",
+                 out.refusals.empty() ? " (timed out)" : "");
+
+  for (const auto& [server_index, p] : got) {
+    if (p.stack.cancelled) out.cancelled = true;
+    for (const auto& c : p.stack.captures) {
+      StackedCamera sc;
+      sc.server_index    = server_index;
+      sc.local_camera_id = c.camera_id;
+      sc.stats           = c;
+      if (auto* info = store_.findByServer(server_index, c.camera_id))
+        sc.global_camera_id = info->global_id;
+      for (const auto& f : p.frames)
+        if (f->camera_id == c.camera_id) sc.frame = f;
+      out.cameras.push_back(std::move(sc));
+    }
+  }
+  std::sort(out.cameras.begin(), out.cameras.end(),
+            [](const StackedCamera& a, const StackedCamera& b) {
               return a.global_camera_id < b.global_camera_id;
             });
   return out;

@@ -158,6 +158,8 @@ void ChunkReassembler::handleStart(const std::uint8_t* data, std::size_t len) {
   const std::uint8_t  af_state          = hdr.af_state;
   const std::uint8_t  detection_kind    = hdr.detection_kind;
   const std::int32_t  focus_fom         = hdr.focus_fom;
+  const std::uint8_t  frame_kind        = hdr.frame_kind;
+  const std::uint16_t capture_id        = hdr.capture_id;
 
   // The start message carries the header plus an optional detection block. Its
   // byte size is corner_block_size regardless of detection_kind, so the length
@@ -192,6 +194,9 @@ void ChunkReassembler::handleStart(const std::uint8_t* data, std::size_t len) {
     b.height            = height;
     b.bytes_per_line    = bytes_per_line;
     b.pixel_format      = pixel_format;
+    b.frame_kind        = frame_kind;
+    b.capture_id        = capture_id;
+    b.detection_kind    = detection_kind;
     b.frames_saved      = frames_saved;
     b.timestamp_us      = timestamp_us;
     b.frame_duration_us = frame_duration_us;
@@ -258,6 +263,7 @@ void ChunkReassembler::handleChunk(const std::uint8_t* data, std::size_t len) {
   }
   slot.assign(data + sizeof(chd), data + sizeof(chd) + chunk_size);
   inf.received++;
+  inf.last_chunk = std::chrono::steady_clock::now();
 
   if (inf.received == inf.total_chunks) {
     // Concatenate in chunk-index order into the destination FrameBuffer.
@@ -286,7 +292,7 @@ void ChunkReassembler::handleChunk(const std::uint8_t* data, std::size_t len) {
 void ChunkReassembler::sweepStale(std::chrono::milliseconds timeout) {
   const auto now = std::chrono::steady_clock::now();
   for (auto it = in_flight_.begin(); it != in_flight_.end();) {
-    if (now - it->second.started > timeout) {
+    if (now - it->second.last_chunk > timeout) {
       spdlog::warn("dropping stale frame uuid {} ({}/{} chunks)", it->first,
                    it->second.received, it->second.total_chunks);
       pool_.release(std::move(it->second.buf));

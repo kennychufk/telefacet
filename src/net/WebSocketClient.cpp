@@ -2,6 +2,8 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+
 #include "net/Protocol.hpp"
 
 namespace telefacet::net {
@@ -24,6 +26,56 @@ data::FocusFomRegion parseFocusFomRegion(const nlohmann::json& j) {
   return r;
 }
 
+RawStreamInfo parseRawStream(const nlohmann::json& j) {
+  RawStreamInfo r;
+  if (!j.is_object()) return r;
+  r.format    = j.value("format", std::string{});
+  r.width     = j.value("width", 0u);
+  r.height    = j.value("height", 0u);
+  r.stride    = j.value("stride", 0u);
+  r.bit_depth = j.value("bit_depth", 0);
+  r.valid     = r.width > 0 && r.height > 0;
+  return r;
+}
+
+StackCapture parseStackCapture(const nlohmann::json& c) {
+  StackCapture sc;
+  sc.camera_id          = c.value("camera_id", 0u);
+  sc.error              = c.value("error", std::string{});
+  sc.frames_stacked     = c.value("frames_stacked", 0);
+  sc.frames_rejected    = c.value("frames_rejected", 0);
+  sc.settle_frames      = c.value("settle_frames", 0);
+  sc.first_frame_id     = c.value("first_frame_id", 0u);
+  sc.last_frame_id      = c.value("last_frame_id", 0u);
+  sc.first_timestamp_us = c.value("first_timestamp_us", std::uint64_t{0});
+  sc.last_timestamp_us  = c.value("last_timestamp_us", std::uint64_t{0});
+  sc.exposure_time      = c.value("exposure_time", std::int64_t{0});
+  sc.analogue_gain      = c.value("analogue_gain", 0.0);
+  sc.black_level        = c.value("black_level", 0.0);
+  sc.bit_depth          = c.value("bit_depth", 0);
+  sc.white_fraction     = c.value("white_fraction", 0.0);
+  sc.peak_fraction      = c.value("peak_fraction", 0.0);
+  sc.clipped_fraction   = c.value("clipped_fraction", 0.0);
+  sc.width              = c.value("width", 0u);
+  sc.height             = c.value("height", 0u);
+  sc.accumulate_ms      = c.value("accumulate_ms", 0.0);
+  return sc;
+}
+
+// Whether an uncoded `error` that arrives while a capture request awaits its
+// ack is that request's refusal. The server refuses a capture synchronously,
+// so the reply directly follows the request; the wording check only keeps an
+// unrelated command's error from the same moment from being taken for one.
+// Every capture refusal names the capture, its camera or one of its fields.
+bool looksLikeCaptureRefusal(const std::string& m) {
+  for (const char* key :
+       {"capture", "stack", "trigger", "running", "exposure_time",
+        "skip_frames", "num_frames", "analogue_gain", "send_image",
+        "camera_id"})
+    if (m.find(key) != std::string::npos) return true;
+  return false;
+}
+
 }  // namespace
 
 WebSocketClient::WebSocketClient(std::size_t server_index, std::string address,
@@ -32,15 +84,10 @@ WebSocketClient::WebSocketClient(std::size_t server_index, std::string address,
       address_(std::move(address)),
       sensor_(std::move(sensor)),
       pool_(pool),
-      reassembler_(
-          pool_,
-          [this](std::shared_ptr<data::FrameBuffer> f) {
-            {
-              std::lock_guard<std::mutex> lk(meta_mu_);
-              f->focus_fom_region = focus_fom_region_;
-            }
-            if (on_frame_) on_frame_(server_index_, std::move(f));
-          }) {
+      reassembler_(pool_,
+                   [this](std::shared_ptr<data::FrameBuffer> f) {
+                     onAssembled(std::move(f));
+                   }) {
   ws_.setUrl(address_);
   ws_.disablePerMessageDeflate();
   // Auto-reconnect with exponential backoff (built-in).
@@ -64,10 +111,84 @@ void WebSocketClient::stop() {
   connected_.store(false);
 }
 
+void WebSocketClient::onAssembled(std::shared_ptr<data::FrameBuffer> f) {
+  {
+    std::lock_guard<std::mutex> lk(meta_mu_);
+    f->focus_fom_region = focus_fom_region_;
+  }
+  if (!proto::isCaptureFrameKind(f->frame_kind)) {
+    if (on_frame_) on_frame_(server_index_, std::move(f));
+    return;
+  }
+
+  // A capture frame (§5.9): match it to the result that announced it, by kind
+  // and capture_id (the id's low 16 bits), then by camera.
+  const CaptureKind kind =
+      f->frame_kind == static_cast<std::uint8_t>(proto::FrameKind::Stack)
+          ? CaptureKind::Stack
+          : CaptureKind::Trigger;
+  CaptureFrame cf;
+  bool matched = false, complete = false;
+  {
+    std::lock_guard<std::mutex> lk(meta_mu_);
+    if (capture_acked_ && kind == capture_kind_ &&
+        f->capture_id == static_cast<std::uint16_t>(capture_id_) &&
+        capture_received_ < capture_entries_.size()) {
+      for (const auto& e : capture_entries_) {
+        if (e.value("camera_id", ~0u) == f->camera_id) {
+          cf.result = e;
+          break;
+        }
+      }
+      matched  = true;
+      complete = ++capture_received_ == capture_entries_.size();
+    }
+  }
+  if (!matched) {
+    spdlog::warn("[ws#{}] {} frame #{} from camera {} matches no pending "
+                 "capture",
+                 server_index_, captureKindName(kind), f->capture_id,
+                 f->camera_id);
+  } else if (complete) {
+    spdlog::info("[ws#{}] {} #{}: all frames received", server_index_,
+                 captureKindName(kind), f->capture_id);
+  }
+  cf.frame = std::move(f);
+  if (on_capture_frame_) on_capture_frame_(server_index_, cf);
+}
+
+void WebSocketClient::noteCaptureRequested(CaptureKind kind) {
+  std::lock_guard<std::mutex> lk(meta_mu_);
+  capture_requests_.push_back(kind);
+}
+
+void WebSocketClient::noteCaptureAcked(CaptureKind kind, std::uint32_t id,
+                                       std::vector<nlohmann::json> entries) {
+  std::lock_guard<std::mutex> lk(meta_mu_);
+  auto it = std::find(capture_requests_.begin(), capture_requests_.end(), kind);
+  if (it != capture_requests_.end()) capture_requests_.erase(it);
+  capture_acked_    = true;
+  capture_kind_     = kind;
+  capture_id_       = id;
+  capture_entries_  = std::move(entries);
+  capture_received_ = 0;
+}
+
+void WebSocketClient::resetCaptures() {
+  // The server discards a disconnected commander's queued capture frames, so
+  // nothing outstanding survives a reconnect.
+  std::lock_guard<std::mutex> lk(meta_mu_);
+  capture_requests_.clear();
+  capture_acked_ = false;
+  capture_entries_.clear();
+  capture_received_ = 0;
+}
+
 void WebSocketClient::onMessage(const ix::WebSocketMessagePtr& msg) {
   switch (msg->type) {
     case ix::WebSocketMessageType::Open:
       connected_.store(true);
+      resetCaptures();
       spdlog::info("[ws#{}] connected", server_index_);
       if (on_conn_) on_conn_(server_index_, true);
       // Mirror JS: discover and sync server state immediately on connect
@@ -81,6 +202,7 @@ void WebSocketClient::onMessage(const ix::WebSocketMessagePtr& msg) {
       spdlog::warn("[ws#{}] closed: code={} reason={}", server_index_,
                    msg->closeInfo.code, msg->closeInfo.reason);
       reassembler_.reset();
+      resetCaptures();
       if (on_conn_) on_conn_(server_index_, false);
       break;
 
@@ -152,7 +274,10 @@ void WebSocketClient::handleText(const std::string& text) {
       // The region is fixed by the configured mode: forget it in IDLE, and
       // fetch it when we find the server configured without knowing it (e.g.
       // after a reconnect, or when another client did the configuring).
-      if (!configured) focus_fom_region_ = {};
+      if (!configured) {
+        focus_fom_region_ = {};
+        raw_stream_       = {};
+      }
       need_region = configured && !focus_fom_region_.valid;
     }
     if (need_region) getFocusFomRegion();
@@ -203,20 +328,23 @@ void WebSocketClient::handleText(const std::string& text) {
   } else if (type == "trigger_result") {
     // Asynchronous ack for trigger_capture (§4.17) — it arrives only once the
     // triggered frame(s) have actually been captured, so it is what a robot
-    // loop waits on before moving again.
+    // loop waits on before moving again. One capture frame per entry follows.
     TriggerResult tr;
     tr.valid      = true;
     tr.trigger_id = j.value("trigger_id", 0u);
     tr.cancelled  = j.value("cancelled", false);
+    std::vector<nlohmann::json> entries;
     if (j.contains("captures") && j["captures"].is_array()) {
       for (const auto& c : j["captures"]) {
         TriggerCapture tc;
         tc.camera_id = c.value("camera_id", 0u);
         tc.frame_id  = c.value("frame_id", 0u);
-        tc.filename  = c.value("filename", std::string{});
-        tr.captures.push_back(std::move(tc));
+        tr.captures.push_back(tc);
+        entries.push_back(c);
       }
     }
+    tr.raw = std::move(j);
+    noteCaptureAcked(CaptureKind::Trigger, tr.trigger_id, std::move(entries));
     {
       std::lock_guard<std::mutex> lk(meta_mu_);
       last_trigger_result_ = tr;
@@ -225,11 +353,43 @@ void WebSocketClient::handleText(const std::string& text) {
                  tr.trigger_id, tr.cancelled ? "cancelled" : "complete",
                  tr.captures.size());
     if (on_trigger_) on_trigger_(server_index_, tr);
+  } else if (type == "stack_result") {
+    // Asynchronous result of stack_capture (§4.19). A stacked image follows
+    // for every camera without an `error`.
+    StackResult sr;
+    sr.valid     = true;
+    sr.stack_id  = j.value("stack_id", 0u);
+    sr.cancelled = j.value("cancelled", false);
+    std::vector<nlohmann::json> entries;
+    if (j.contains("captures") && j["captures"].is_array()) {
+      for (const auto& c : j["captures"]) {
+        sr.captures.push_back(parseStackCapture(c));
+        if (sr.captures.back().error.empty()) entries.push_back(c);
+      }
+    }
+    sr.raw = std::move(j);
+    const std::size_t images = entries.size();
+    noteCaptureAcked(CaptureKind::Stack, sr.stack_id, std::move(entries));
+    {
+      std::lock_guard<std::mutex> lk(meta_mu_);
+      last_stack_result_ = sr;
+    }
+    spdlog::info("[ws#{}] stack {} {}: {} camera(s), {} image(s) to follow",
+                 server_index_, sr.stack_id,
+                 sr.cancelled ? "cancelled" : "done", sr.captures.size(),
+                 images);
+    for (const auto& c : sr.captures)
+      if (!c.error.empty())
+        spdlog::warn("[ws#{}] stack {} camera {}: {}", server_index_,
+                     sr.stack_id, c.camera_id, c.error);
+    if (on_stack_) on_stack_(server_index_, sr);
   } else if (type == "status") {
     // The configure reply carries the FocusFoM region for the new mode.
+    // So does its `raw` (null unless configured with raw: true).
     if (j.contains("focus_fom_region")) {
       std::lock_guard<std::mutex> lk(meta_mu_);
       focus_fom_region_ = parseFocusFomRegion(j["focus_fom_region"]);
+      raw_stream_ = j.contains("raw") ? parseRawStream(j["raw"]) : RawStreamInfo{};
     }
     if (on_status_)
       on_status_(server_index_, type, j.value("message", std::string{}));
@@ -237,9 +397,21 @@ void WebSocketClient::handleText(const std::string& text) {
     // Coded errors (`capture_timeout`, or `forbidden` — which a commander
     // never gets) carry a `code`; plain replies carry only `message`.
     const std::string code = j.value("code", std::string{});
+    const std::string message = j.value("message", std::string{});
     spdlog::error("[ws#{}] server error{}: {}", server_index_,
-                  code.empty() ? "" : " [" + code + "]",
-                  j.value("message", std::string{}));
+                  code.empty() ? "" : " [" + code + "]", message);
+    // A capture request is refused with a plain error instead of its ack.
+    std::optional<CaptureKind> refused;
+    if (code.empty() && looksLikeCaptureRefusal(message)) {
+      std::lock_guard<std::mutex> lk(meta_mu_);
+      if (!capture_requests_.empty()) {
+        refused = capture_requests_.front();
+        capture_requests_.erase(capture_requests_.begin());
+        last_capture_refusal_ = message;
+      }
+    }
+    if (refused && on_capture_refused_)
+      on_capture_refused_(server_index_, *refused, message);
     if (on_status_)
       on_status_(server_index_, type, j.value("message", std::string{}));
   } else {
@@ -269,11 +441,13 @@ bool WebSocketClient::getState() {
 }
 
 bool WebSocketClient::configureCameras(std::optional<std::uint32_t> w,
-                                       std::optional<std::uint32_t> h) {
+                                       std::optional<std::uint32_t> h,
+                                       bool raw) {
   // Only send fields that were configured; omitted ⇒ server keeps its default.
   nlohmann::json params = nlohmann::json::object();
   if (w) params["width"] = *w;
   if (h) params["height"] = *h;
+  if (raw) params["raw"] = true;
   return sendCommand({{"cmd", proto::cmd::kConfigure}, {"params", params}});
 }
 
@@ -288,11 +462,43 @@ bool WebSocketClient::setSaveMode(const std::string& mode,
 }
 
 bool WebSocketClient::triggerCapture(std::optional<std::uint32_t> camera_id,
-                                     std::optional<int> skip_frames) {
+                                     std::optional<int> skip_frames,
+                                     std::optional<bool> send_image) {
   nlohmann::json cmd = {{"cmd", proto::cmd::kTriggerCapture}};
   if (camera_id) cmd["camera_id"] = *camera_id;
-  if (skip_frames) cmd["skip_frames"] = *skip_frames;
-  return sendCommand(cmd);
+  // Clamped to the server's accepted range, so an out-of-range value cannot
+  // turn into a refusal.
+  if (skip_frames && *skip_frames > 0)
+    cmd["skip_frames"] = std::min(*skip_frames, 100);
+  if (send_image) cmd["send_image"] = *send_image;
+  return sendCaptureRequest(CaptureKind::Trigger, cmd);
+}
+
+bool WebSocketClient::stackCapture(const StackRequest& req) {
+  nlohmann::json cmd = {{"cmd", proto::cmd::kStackCapture}};
+  if (req.camera_id) cmd["camera_id"] = *req.camera_id;
+  if (req.num_frames) cmd["num_frames"] = std::clamp(*req.num_frames, 1, 1024);
+  if (req.exposure_time_us && *req.exposure_time_us > 0)
+    cmd["exposure_time"] =
+        std::min<std::int64_t>(*req.exposure_time_us, 10000000);
+  if (req.analogue_gain && *req.analogue_gain > 0)
+    cmd["analogue_gain"] = std::clamp(*req.analogue_gain, 1.0, 64.0);
+  if (req.skip_frames) cmd["skip_frames"] = std::clamp(*req.skip_frames, 0, 100);
+  if (req.send_image) cmd["send_image"] = *req.send_image;
+  return sendCaptureRequest(CaptureKind::Stack, cmd);
+}
+
+bool WebSocketClient::sendCaptureRequest(CaptureKind kind,
+                                         const nlohmann::json& cmd) {
+  // Recorded before sending: the refusal or ack is handled on the receive
+  // thread and can land before send() returns here, and must find the request.
+  noteCaptureRequested(kind);
+  if (sendCommand(cmd)) return true;
+  std::lock_guard<std::mutex> lk(meta_mu_);
+  auto it = std::find(capture_requests_.rbegin(), capture_requests_.rend(), kind);
+  if (it != capture_requests_.rend())
+    capture_requests_.erase(std::next(it).base());
+  return false;
 }
 
 bool WebSocketClient::startCameras() {
@@ -373,6 +579,43 @@ data::FocusFomRegion WebSocketClient::focusFomRegion() const {
 TriggerResult WebSocketClient::lastTriggerResult() const {
   std::lock_guard<std::mutex> lk(meta_mu_);
   return last_trigger_result_;
+}
+
+StackResult WebSocketClient::lastStackResult() const {
+  std::lock_guard<std::mutex> lk(meta_mu_);
+  return last_stack_result_;
+}
+
+RawStreamInfo WebSocketClient::rawStream() const {
+  std::lock_guard<std::mutex> lk(meta_mu_);
+  return raw_stream_;
+}
+
+CaptureProgress WebSocketClient::captureProgress() const {
+  std::lock_guard<std::mutex> lk(meta_mu_);
+  CaptureProgress p;
+  const bool receiving =
+      capture_acked_ && capture_received_ < capture_entries_.size();
+  if (!capture_requests_.empty() && !receiving) {
+    // Requested, not yet acked.
+    p.in_progress = true;
+    p.kind        = capture_requests_.front();
+    return p;
+  }
+  if (capture_acked_) {
+    p.acked    = true;
+    p.kind     = capture_kind_;
+    p.id       = capture_id_;
+    p.expected = capture_entries_.size();
+    p.received = capture_received_;
+  }
+  p.in_progress = receiving || !capture_requests_.empty();
+  return p;
+}
+
+std::string WebSocketClient::lastCaptureRefusal() const {
+  std::lock_guard<std::mutex> lk(meta_mu_);
+  return last_capture_refusal_;
 }
 
 }  // namespace telefacet::net

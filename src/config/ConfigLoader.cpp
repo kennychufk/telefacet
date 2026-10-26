@@ -52,6 +52,7 @@ Config loadFromFile(const std::string& path) {
     if (s["sensor"]) sc.sensor = s["sensor"].as<std::string>();
     if (s["width"])  sc.width  = s["width"].as<std::uint32_t>();
     if (s["height"]) sc.height = s["height"].as<std::uint32_t>();
+    if (s["raw"])    sc.raw    = s["raw"].as<bool>();
     cfg.servers.push_back(std::move(sc));
   }
 
@@ -60,11 +61,20 @@ Config loadFromFile(const std::string& path) {
     const auto& f = root["processing"];
     if (f["mode"]) cfg.saving.mode = f["mode"].as<std::string>();
     static const std::vector<std::string> valid = {
-        "none", "buffer", "batch", "trigger", "checkerboard", "checkerboard2x2",
+        "none", "buffer", "batch", "checkerboard", "checkerboard2x2",
         "aruco", "aruco2x2"};
+    std::string valid_list;
+    for (const auto& v : valid) valid_list += (valid_list.empty() ? "" : ", ") + v;
+    if (cfg.saving.mode == "trigger" || cfg.saving.mode == "stack") {
+      throw std::runtime_error(
+          "processing.mode '" + cfg.saving.mode +
+          "' no longer exists: trigger and stack captures work in any mode "
+          "(protocol v8) — use one of: " + valid_list);
+    }
     if (std::find(valid.begin(), valid.end(), cfg.saving.mode) ==
         valid.end()) {
-      throw std::runtime_error("processing.mode invalid: " + cfg.saving.mode);
+      throw std::runtime_error("processing.mode invalid: " + cfg.saving.mode +
+                               " (one of: " + valid_list + ")");
     }
     if (f["save_frames"]) cfg.saving.save_frames = f["save_frames"].as<bool>();
     if (f["output_dir"]) cfg.saving.output_dir = f["output_dir"].as<std::string>();
@@ -91,10 +101,42 @@ Config loadFromFile(const std::string& path) {
       if (f["checkerboard_num_threads"])
         cfg.saving.checkerboard_num_threads =
             f["checkerboard_num_threads"].as<int>();
+      if (f["checkerboard_subpix_window"]) {
+        const int w = f["checkerboard_subpix_window"].as<int>();
+        if (w < 0 || w > 100)
+          throw std::runtime_error(
+              "processing.checkerboard_subpix_window must be in [0, 100]");
+        cfg.saving.checkerboard_subpix_window = w;
+      }
     }
-    if (cfg.saving.mode == "trigger") {
-      if (f["trigger_skip_frames"])
-        cfg.saving.trigger_skip_frames = f["trigger_skip_frames"].as<int>();
+    // Capture-request defaults, valid in every mode.
+    auto intIn = [&](const char* key, int lo, int hi, int& out) {
+      if (!f[key]) return;
+      const int v = f[key].as<int>();
+      if (v < lo || v > hi)
+        throw std::runtime_error(std::string("processing.") + key +
+                                 " must be an integer in [" +
+                                 std::to_string(lo) + ", " +
+                                 std::to_string(hi) + "]");
+      out = v;
+    };
+    intIn("trigger_skip_frames", 0, 100, cfg.saving.trigger_skip_frames);
+    intIn("stack_num_frames", 1, 1024, cfg.saving.stack_num_frames);
+    intIn("stack_skip_frames", 0, 100, cfg.saving.stack_skip_frames);
+    if (f["stack_exposure_time"]) {
+      const auto v = f["stack_exposure_time"].as<std::int64_t>();
+      if (v < 0 || v > 10000000)
+        throw std::runtime_error(
+            "processing.stack_exposure_time must be in [0, 10000000] us "
+            "(0 = keep the preview's)");
+      cfg.saving.stack_exposure_time = v;
+    }
+    if (f["stack_analogue_gain"]) {
+      const double g = f["stack_analogue_gain"].as<double>();
+      if (!(g == 0.0 || (g >= 1.0 && g <= 64.0)))
+        throw std::runtime_error(
+            "processing.stack_analogue_gain must be 0 (unpinned) or in [1, 64]");
+      cfg.saving.stack_analogue_gain = g;
     }
     if (cfg.saving.mode == "aruco" || cfg.saving.mode == "aruco2x2") {
       if (f["aruco_full_res_detection"])
@@ -105,6 +147,15 @@ Config loadFromFile(const std::string& path) {
       if (f["aruco_corner_refine"])
         cfg.saving.aruco_corner_refine = f["aruco_corner_refine"].as<bool>();
     }
+  }
+
+  // ---- captures (optional): client-side saving of trigger / stack frames ----
+  if (root["captures"]) {
+    const auto& c = root["captures"];
+    if (c["save"]) cfg.captures.save = c["save"].as<bool>();
+    if (c["dir"])  cfg.captures.dir  = c["dir"].as<std::string>();
+    if (cfg.captures.dir.empty())
+      throw std::runtime_error("captures.dir must not be empty");
   }
 
   return cfg;

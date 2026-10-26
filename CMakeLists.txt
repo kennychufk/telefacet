@@ -31,6 +31,8 @@ add_library(telefacet_core STATIC
   src/net/MultiServerManager.cpp
   src/data/FrameBufferPool.cpp
   src/data/CameraStore.cpp
+  src/data/CaptureSaver.cpp
+  src/data/StackImage.cpp
   src/client/Client.cpp
 )
 

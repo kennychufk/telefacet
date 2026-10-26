@@ -1,4 +1,4 @@
-# Example telefacet configuration (protocol v5).
+# Example telefacet configuration (protocol v8).
 
 servers:
     # Sensor type and resolution are per-server (a client may talk to servers
@@ -12,21 +12,34 @@ servers:
   #   sensor: imx708
   #   width: 2304
   #   height: 1296
+  # - address: ws://192.168.1.102:9001
+  #   sensor: imx477
+  #   width: 4056
+  #   height: 3040
+  #   raw: true                 # adds the raw Bayer stream Stack needs (24.7 MB per buffer here)
 
 processing:                   # (formerly `frame_saving`)
-  mode: none                  # none | buffer | batch | trigger | checkerboard | checkerboard2x2 | aruco | aruco2x2
+  mode: none                  # none | buffer | batch | checkerboard | checkerboard2x2 | aruco | aruco2x2
   save_frames: true           # false ⇒ detector still runs + streams corners/markers, but no frames written to disk
   output_dir: camera_frames
   prepend_timestamp_to_dir: false
   batch_size: 10
   writer_threads: 4
-  # trigger mode only — save-on-demand: nothing is written until the client
-  # sends trigger_capture (the control panel's "Trigger capture" button).
-  # trigger_skip_frames is how many settling frames each camera discards before
-  # the one that is kept; a per-request skip_frames overrides it.
+  # Captures work in every mode and get its detection; the server saves none.
+  # Trigger: settling frames each camera discards before the one it keeps (0..100).
   trigger_skip_frames: 0
+  # Stack (servers with raw: true): defaults for each Stack press.
+  stack_num_frames: 16          # 1..1024
+  stack_exposure_time: 0        # µs, pinned for the stack then restored; 0 = preview's
+  stack_analogue_gain: 0        # 1..64; 0 = 1.0 with a pinned exposure, else preview's
+  stack_skip_frames: 0          # discarded after the pinned settings arrive
   # checkerboard / checkerboard2x2 modes only:
   checkerboard_rows: 8
   checkerboard_cols: 11
   checkerboard_full_res_detection: false
   checkerboard_num_threads: 4
+  # checkerboard_subpix_window: 15  # cornerSubPix half-window, full-res px (server default 15; 0 = off)
+
+captures:                     # client-side saving of trigger / stack captures
+  save: true
+  dir: captures               # <dir>/<YYYYMMDD-HHMMSS>-captures/<host_port>/

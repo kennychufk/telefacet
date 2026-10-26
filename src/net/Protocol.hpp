@@ -5,13 +5,18 @@
 // any little-endian host (the only platforms we target) the structs map
 // directly to their on-the-wire representation.
 //
-// Protocol v7 (see cherupi-v4l2/docs/websocket-protocol.md §8). The 72-byte
+// Protocol v8 (see cherupi-v4l2/docs/websocket-protocol.md §8). The 72-byte
 // ChunkHeader is a strict extension of the original v2 40-byte header — the
 // first 40 bytes are byte-identical — plus an optional variable-size detection
 // block that follows the header in the same WS message when the server's save
 // mode is a detector mode (`checkerboard` / `checkerboard2x2` /
 // `aruco` / `aruco2x2`). The `detection_kind` header byte selects the block's
 // per-record layout: CornerSetHeader (checkerboard) or MarkerSetHeader (aruco).
+//
+// v8 made trigger_capture and stack_capture commands that work in any process
+// mode: the frames they produce are *capture frames* (§5.9) sent to the
+// commander only, marked by `frame_kind` and carrying the request's id in
+// `capture_id`.
 
 #include <cstdint>
 
@@ -19,7 +24,7 @@ namespace telefacet::proto {
 
 inline constexpr std::uint32_t kChunkStartMagic = 0x4348554Eu;  // 'CHUN'
 inline constexpr std::uint32_t kChunkDataMagic  = 0x43484E4Bu;  // 'CHNK'
-inline constexpr std::uint32_t kChunkVersion    = 7u;
+inline constexpr std::uint32_t kChunkVersion    = 8u;
 
 // ChunkHeader.detection_kind (offset 65) — classifies the detection block (if
 // any) that follows the header and how to parse each of its num_corner_sets
@@ -30,6 +35,26 @@ enum class DetectionKind : std::uint8_t {
   Aruco        = 2,  // records are MarkerSetHeader (§5.4.2)
 };
 
+// ChunkHeader.frame_kind (offset 66). Stack and Trigger are capture frames
+// (§5.9): one per camera per request, queued (never latest-wins) and sent to
+// the commander whatever its subscription or header-only state.
+enum class FrameKind : std::uint8_t {
+  Live    = 0,  // a camera frame from the subscribed stream
+  Stack   = 1,  // a stacked raw image from stack_capture ('SF32', §5.5)
+  Trigger = 2,  // a YUV420 frame taken by trigger_capture
+};
+
+inline constexpr bool isCaptureFrameKind(std::uint8_t kind) {
+  return kind == static_cast<std::uint8_t>(FrameKind::Stack) ||
+         kind == static_cast<std::uint8_t>(FrameKind::Trigger);
+}
+
+// ChunkHeader.pixel_format FourCCs.
+inline constexpr std::uint32_t kPixelFormatYU12 = 0x32315559u;  // 'YU12' I420
+// A stacked image: width × height little-endian float32, linear DN above
+// black, one sample per 2×2 Bayer quad (§5.5).
+inline constexpr std::uint32_t kPixelFormatSF32 = 0x32334653u;  // 'SF32'
+
 // 8 bytes
 struct ChunkStartMarker {
   std::uint32_t magic;
@@ -38,7 +63,8 @@ struct ChunkStartMarker {
 
 // 72 bytes. Fields 0..36 match the legacy v2 layout exactly; everything from
 // timestamp_us onward was added across v3 (timing), v4 (corner block), v5
-// (per-frame focus metadata), v6 (detection kind) and v7 (focus FoM).
+// (per-frame focus metadata), v6 (detection kind), v7 (focus FoM, frame kind)
+// and v8 (capture id).
 struct ChunkHeader {
   std::uint32_t frame_uuid;         //  0
   std::uint32_t frame_id;           //  4
@@ -54,11 +80,12 @@ struct ChunkHeader {
   std::uint32_t frame_duration_us;  // 48  IPA/ISP-reported duration (v3)
   std::uint32_t corner_block_size;  // 52  bytes of CornerBlock following (v4)
   std::uint16_t num_corner_sets;    // 56  CornerSetHeader count in block (v4)
-  std::uint16_t reserved;           // 58  always 0
+  std::uint16_t capture_id;         // 58  trigger_id / stack_id; 0 live (v8)
   float         lens_position;      // 60  dioptres; NaN if unavailable (v5)
   std::uint8_t  af_state;           // 64  libcamera AfState; 0xFF if none (v5)
   std::uint8_t  detection_kind;     // 65  DetectionKind: 0=none/1=cb/2=aruco (v6)
-  std::uint8_t  reserved2[2];       // 66  padding; always 0
+  std::uint8_t  frame_kind;         // 66  FrameKind: 0=live/1=stack/2=trigger
+  std::uint8_t  reserved2;          // 67  padding; always 0
   std::int32_t  focus_fom;          // 68  libcamera FocusFoM; -1 if none (v7)
 } __attribute__((packed));
 
@@ -108,9 +135,11 @@ inline constexpr const char* kGetState               = "get_state";
 inline constexpr const char* kConfigure              = "configure";
 inline constexpr const char* kUnconfigure            = "unconfigure";
 inline constexpr const char* kSetProcessMode         = "set_process_mode";
-// Save-on-demand shutter for the `trigger` process mode (§4.17). Answered
-// asynchronously with a `trigger_result` message, not a plain `status`.
+// On-demand captures, in any process mode. Each is answered asynchronously
+// (`trigger_result` / `stack_result`, not a plain `status`) and then followed
+// by its capture frames (§4.17, §4.19, §5.9).
 inline constexpr const char* kTriggerCapture         = "trigger_capture";
+inline constexpr const char* kStackCapture           = "stack_capture";
 inline constexpr const char* kStartCameras           = "start_cameras";
 inline constexpr const char* kStartStream            = "start_stream";
 inline constexpr const char* kStopStream             = "stop_stream";

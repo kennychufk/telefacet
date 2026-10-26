@@ -1,15 +1,37 @@
 # telefacet
 
 Native C++ / OpenGL replacement for the `telefacet-web` Vue client. Connects
-to one or more `cherupi-v4l2` WebSocket servers (WebSocket protocol v7),
+to one or more `cherupi-v4l2` WebSocket servers (WebSocket protocol v8),
 converts the YUV420 frames delivered by the server's hardware ISP to RGB on
 the GPU, and renders them in a dockable multi-camera view. Detector process modes
 (`checkerboard` / `checkerboard2x2` / `aruco` / `aruco2x2`) overlay their
 per-frame detections on each camera view — checkerboard corners in green,
-ArUco/AprilTag markers as amber quads with corner dots and id labels. The
-`trigger` process mode adds a save-on-demand shutter: nothing is written to disk
-until the control panel's **Trigger capture** button (or, headlessly,
-`Client::triggerCapture()`) asks for a frame.
+ArUco/AprilTag markers as amber quads with corner dots and id labels.
+
+### Captures
+
+Two on-demand captures work in **any** process mode and get that mode's
+detection (protocol v8, §4.17, §4.19):
+
+* **Trigger** takes the next frame of every running camera — the shutter a
+  calibration rig fires once its arm has stopped.
+* **Stack** averages N raw Bayer frames per camera into one half-resolution
+  float image, so corner scatter falls as 1/√N. It needs `raw: true` on the
+  server in the YAML (the section appears only then); the stack's exposure and
+  gain can be pinned, and each camera's result line shows how bright the
+  board's white came out.
+
+The server saves neither: it sends the frames back to this client. Firing a
+capture switches the tiles to the **Capture** view (toggle with **V**), where
+each camera shows its last capture with a badge (kind, id, frame, age, saved
+state) and its own detections. **Capture overlay** draws the last capture's
+corners over the live frames in cyan. Every capture is written to this
+machine (unless **Save captures** is off) under
+`<captures.dir>/<YYYYMMDD-HHMMSS>-captures/<host_port>/` — triggers as
+`cam<cam>-<frame_id>.yuv`, stacks as `.npy` (float32, `np.load`-able), each
+with a `.json` sidecar holding the metadata, the detection and the server's
+result entry. Headlessly, `Client::triggerCapture()` and
+`Client::stackCapture()` return the frames instead (`docs/client-api.md`).
 
 Hovering a camera view shows that frame's lens position (dioptres) and AF
 state. The **Focus FoM** checkbox (Options, off by default) adds each view's
@@ -39,7 +61,8 @@ the binary at configure time, so the executable is self-contained.
 
 `telefacet` connects, runs `discover`, and waits. Use the **telefacet**
 control panel to `Configure`, `Start cameras`, then toggle individual
-streams. Press **P** to hide/show the control panel.
+streams. Press **P** to hide/show the control panel, **V** to switch the
+tiles between live frames and the last captures.
 
 ### Client role
 
@@ -56,8 +79,10 @@ independent of, and yield to, this client's.
 ## Layout
 
 * `src/net/` — WebSocket client, chunked-frame reassembly, multi-server roster
-* `src/data/` — `FrameBufferPool` (recycled byte buffers) and `CameraStore`
-  (latest-frame-per-camera, atomic publish/consume)
+* `src/data/` — `FrameBufferPool` (recycled byte buffers), `CameraStore`
+  (latest-frame-per-camera, atomic publish/consume, last capture per camera),
+  `CaptureSaver` (writes captures on a worker thread) and `StackImage`
+  (stacked-image display and `.npy` helpers)
 * `src/client/` — `Client`, the GUI-free API for consuming streams from another
   app (drives the lifecycle into `aruco2x2`, hands out latest per-camera marker
   detections). See `docs/client-api.md`. Part of `telefacet_core`.
@@ -76,4 +101,6 @@ independent of, and yield to, this client's.
   to a persistent `GL_R8` texture, runs the debayer shader into a per-camera
   FBO, and draws the result via `ImGui::Image`.
 * Latest-wins semantics — older frames are dropped (matches the live-viewer
-  behavior of the JS client).
+  behavior of the JS client). Capture frames bypass this: each one is kept as
+  its camera's last capture, handed to the `CaptureSaver` from the network
+  thread and written on the saver's own thread.

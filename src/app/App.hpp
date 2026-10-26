@@ -8,6 +8,7 @@
 
 #include "config/ConfigLoader.hpp"
 #include "data/CameraStore.hpp"
+#include "data/CaptureSaver.hpp"
 #include "gl/YuvRenderer.hpp"
 #include "net/MultiServerManager.hpp"
 #include "ui/CameraGrid.hpp"
@@ -34,6 +35,9 @@ class App {
   GLFWwindow*            window_ = nullptr;
   data::CameraStore      store_;
   std::unique_ptr<net::MultiServerManager> msm_;
+  // Writes every trigger / stack capture to this machine (the server keeps
+  // none). Outlives msm_'s callbacks: destroyed after the disconnect.
+  std::unique_ptr<data::CaptureSaver>      capture_saver_;
   std::unique_ptr<gl::YuvRenderer>         yuv_renderer_;
   std::unique_ptr<ui::CameraGrid>          grid_;
   std::unique_ptr<ui::ControlPanel>        panel_;

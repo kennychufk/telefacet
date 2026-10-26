@@ -23,7 +23,7 @@ connectAll → wait for discovery → configureAll → lens/exposure → set sav
 
 | option | default | why |
 |---|---|---|
-| `save_mode` | `"aruco2x2"` | server-side processing mode; any mode from protocol §4.5 (incl. `"trigger"` — see below) |
+| `save_mode` | `"aruco2x2"` | server-side processing mode; any mode from protocol §4.5. Captures (below) work in all of them |
 | `aruco_corner_refine` | `true` | subpixel corners → better PnP |
 | `save_frames` | `false` | don't fill the Pi's disk |
 | `header_only` | `true` | stream only the header + corner block, **not** the pixels — a large bandwidth saving; the detection block rides every frame regardless |
@@ -42,50 +42,80 @@ directly — `client.store().consumeIfNew(global_id, cursor)` hands back the
 Note that `"none"` is the only ungated mode: detector modes stream only the
 frames the on-device detector finished, so they drop frames under load by design.
 
-## Save-on-demand: `triggerCapture()`
+## On-demand captures: `triggerCapture()` and `stackCapture()`
 
-With `save_mode = "trigger"` the servers write **nothing** until asked — frames
-still stream live, but one only hits disk when the client fires the shutter
-(protocol §4.17). This is the automated-calibration path: move the camera with a
-robot arm, wait for it to come to a complete stop, then trigger, so no saved
-frame carries motion blur.
+Since protocol v8 both captures are commands that work in **any** process mode:
+each frame they produce gets that mode's detection, nothing is saved on the
+server, and the frames come back to this client (§5.9) — whatever the live
+subscription or header-only state. One capture of either kind at a time; the
+servers refuse an overlapping one.
+
+### `triggerCapture()`
+
+The automated-calibration path: move the camera with a robot arm, wait for it
+to come to a complete stop, then trigger, so no frame carries motion blur.
 
 ```cpp
 telefacet::client::ClientOptions opts;
-opts.save_mode   = "trigger";
-opts.save_frames = true;           // trigger mode is pointless without it
-opts.header_only = false;          // optional: also watch the live preview
+opts.save_mode = "checkerboard";   // the frames come back with their corners
 client.start(opts);
 
 for (const Pose& pose : calibration_poses) {
   arm.moveTo(pose);
   arm.waitUntilStopped();
 
-  auto shot = client.triggerCapture(std::chrono::seconds(5));
-  if (!shot) { /* timed out, or a server cancelled — retry this pose */ }
+  auto shot = client.triggerCapture(std::chrono::seconds(10));
+  if (!shot) { /* refused, timed out or cancelled — retry this pose */ }
   for (const auto& c : shot.captures) {
-    // c.global_camera_id, c.frame_id, c.filename (path on the server host)
+    const telefacet::data::FrameBuffer& f = *c.frame;   // yours to keep
+    // f.data: full-resolution I420 (bytes_per_line × height Y plane, then U, V)
+    // f.corner_sets / f.aruco_markers: the mode's detection, full-frame pixels
   }
 }
 ```
 
-`triggerCapture()` blocks until **every** server has acked, which happens only
-once its cameras have really delivered the triggered frame — so returning is the
-signal the arm may move again. It arms all running cameras on all servers, so
-one call yields one frame per camera, all at the same pose.
+It arms all running cameras on all connected servers, so one call yields one
+frame per camera, all at the same pose, and blocks until every server has
+acked **and** its frames have arrived. The arm may move as soon as the frames
+are taken, which is a little earlier (detection and transfer follow).
 
 | field | meaning |
 |---|---|
-| `complete` | every server acked before the timeout. False ⇒ partial: check the servers are connected and actually in `trigger` mode (a rejected request answers with `error`, never an ack) |
-| `cancelled` | a server abandoned its trigger because capture stopped mid-flight; its cameras are missing from `captures` |
-| `captures` | one entry per camera that delivered, sorted by `global_camera_id`: ids, `frame_id`, and the server-side `filename` |
+| `complete` | every server acked and delivered before the timeout |
+| `cancelled` | a server abandoned its trigger because capture stopped mid-flight; its untaken cameras are missing |
+| `refusals` | `"server <i>: <message>"` for each server that refused (not RUNNING, a capture already in progress, ...) — the call returns at once rather than waiting out the timeout |
+| `captures` | one `CapturedFrame` per camera that delivered, sorted by `global_camera_id`: ids, `frame_id` and the `frame` itself |
 
-`skip_frames` (2nd arg) overrides the server's configured `trigger_skip_frames`
-— extra frames discarded per camera before the kept one, for rigs needing more
-settling time than the frame already in flight allows.
+`TriggerOptions` (2nd arg): `skip_frames` (0..100, default the config's
+`processing.trigger_skip_frames`) discards settling frames per camera before the
+kept one; `send_image = false` returns header + detection only — the corners
+without the pixels, for a slow link.
 
-One trigger at a time: the call is not reentrant, and the servers reject
-overlapping triggers.
+### `stackCapture()`
+
+Averages raw Bayer frames per camera on every server configured with
+`raw: true` (`ServerCfg::raw`) and returns one stacked image each. On a still
+rig a corner's frame-to-frame scatter is photon noise, so it falls as
+1/√`num_frames` (measured on an IMX477 at 4056×3040: 0.0154 px for one frame,
+0.0029 px for 32).
+
+```cpp
+telefacet::client::StackOptions so;
+so.num_frames       = 32;
+so.exposure_time_us = 50000;   // pinned for the stack, then restored
+auto st = client.stackCapture(std::chrono::seconds(60), so);
+for (const auto& c : st.cameras) {
+  if (!c.stats.error.empty()) continue;           // this camera failed
+  // c.stats.white_fraction: aim for ~0.8; c.stats.clipped_fraction: keep at 0
+  const telefacet::data::FrameBuffer& img = *c.frame;
+  // img.data: width × height float32 (pixel_format 'SF32'), linear DN above
+  // black; img.corner_sets in stack pixels: sensor pixel = 2·b + 0.5
+}
+```
+
+Unset `StackOptions` fields take the config's `processing.stack_*` defaults.
+`StackOutcome` converts to `true` only when every camera stacked and its image
+arrived.
 
 ## Consuming detections
 

@@ -52,6 +52,10 @@ struct FrameBuffer {
   std::uint32_t height            = 0;
   std::uint32_t bytes_per_line    = 0;
   std::uint32_t pixel_format      = 0;  // FourCC from ChunkHeader
+  // v8 frame kind (proto::FrameKind: 0 live, 1 stack, 2 trigger) and, for a
+  // capture frame, the trigger_id / stack_id of the request (low 16 bits).
+  std::uint8_t  frame_kind        = 0;
+  std::uint16_t capture_id        = 0;
   std::uint32_t frames_saved      = 0;
   // v3 timing metadata.
   std::uint64_t timestamp_us      = 0;  // monotonic HW capture timestamp
@@ -64,6 +68,9 @@ struct FrameBuffer {
   // Where focus_fom is measured. Not on the wire per frame: stamped from the
   // owning server's last report (WebSocketClient) as the frame is delivered.
   FocusFomRegion focus_fom_region;
+  // Which detector ran on this frame (proto::DetectionKind: 0 none, 1
+  // checkerboard, 2 aruco) — tells "nothing found" apart from "not detected".
+  std::uint8_t  detection_kind    = 0;
   // v4 checkerboard corners (empty unless a checkerboard save mode found a board).
   std::vector<CornerSet> corner_sets;
   // v6 ArUco markers (empty unless an aruco save mode detected a marker).

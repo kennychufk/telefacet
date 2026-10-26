@@ -5,6 +5,7 @@
 // MultiServerManager.
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -33,15 +34,43 @@ class MultiServerManager {
   // keep serverState() honest after configure/start/stop and external changes.
   void getStateAll();
   void setSaveModeAll(const std::string& mode, const nlohmann::json& params);
-  // Fire a `trigger` mode capture on every connected server (§4.17). Each
-  // server arms all of its running cameras and acks asynchronously once they
-  // have delivered; subscribe via setOnTriggerResult() or poll
-  // WebSocketClient::lastTriggerResult(). Returns how many servers it reached.
-  std::size_t triggerCaptureAll(std::optional<int> skip_frames = std::nullopt);
-  // Forwarded from every WebSocketClient. Fires on that client's receive
+  // Fire a trigger_capture on every connected server (§4.17), in any process
+  // mode. Each server arms all of its running cameras, acks asynchronously
+  // once they have delivered, then sends one capture frame per camera.
+  // Returns the indices of the servers the request was sent to.
+  std::vector<std::size_t> triggerCaptureAll(
+      std::optional<int> skip_frames = std::nullopt,
+      std::optional<bool> send_image = std::nullopt);
+  // Fire a stack_capture on every connected server configured with `raw`
+  // (§4.19); `req.camera_id` is ignored (each server stacks all its cameras).
+  // Returns the indices of the servers the request was sent to.
+  std::vector<std::size_t> stackCaptureAll(const StackRequest& req);
+  // Whether any connected server still has a capture in progress — requested
+  // and not refused, or acked with frames still to come.
+  bool anyCaptureInProgress() const;
+  // Whether the config asks any server for the raw stream stacking needs.
+  bool anyRawConfigured() const;
+
+  // Forwarded from every WebSocketClient. Each fires on that client's receive
   // thread, so the handler must be thread-safe.
   void setOnTriggerResult(WebSocketClient::TriggerResultCallback cb) {
     on_trigger_ = std::move(cb);
+  }
+  void setOnStackResult(WebSocketClient::StackResultCallback cb) {
+    on_stack_ = std::move(cb);
+  }
+  void setOnCaptureRefused(WebSocketClient::CaptureRefusedCallback cb) {
+    on_refused_ = std::move(cb);
+  }
+  // A capture frame has arrived and is now the camera's lastCapture() in the
+  // store. `capture` is that stored record; the frame is unknown to the
+  // roster (global id unresolved) only during a discovery race, in which case
+  // nothing is stored and `capture` is null.
+  using CaptureFrameCallback = std::function<void(
+      std::size_t /*server_index*/, std::optional<std::size_t> /*global_id*/,
+      const CaptureFrame&, std::shared_ptr<const data::Capture>)>;
+  void setOnCaptureFrame(CaptureFrameCallback cb) {
+    on_capture_frame_ = std::move(cb);
   }
   void setHeaderOnlyAll(bool enabled);
   void resetFrameCountsAll();
@@ -71,6 +100,9 @@ class MultiServerManager {
   bool serverConnected(std::size_t i) const {
     return i < clients_.size() && clients_[i]->connected();
   }
+  const config::ServerCfg& serverConfig(std::size_t i) const {
+    return cfg_.servers[i];
+  }
   WebSocketClient* client(std::size_t i) {
     return i < clients_.size() ? clients_[i].get() : nullptr;
   }
@@ -80,11 +112,15 @@ class MultiServerManager {
                    const std::vector<DiscoveredCamera>& cams);
   void onFrame(std::size_t server_index,
                std::shared_ptr<data::FrameBuffer> buf);
+  void onCaptureFrame(std::size_t server_index, const CaptureFrame& cf);
 
   data::CameraStore&                                store_;
   const config::Config&                             cfg_;
   std::vector<std::unique_ptr<WebSocketClient>>     clients_;
   WebSocketClient::TriggerResultCallback            on_trigger_;
+  WebSocketClient::StackResultCallback              on_stack_;
+  WebSocketClient::CaptureRefusedCallback           on_refused_;
+  CaptureFrameCallback                              on_capture_frame_;
 };
 
 }  // namespace telefacet::net

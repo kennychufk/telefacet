@@ -1,5 +1,7 @@
 #include "harness.hpp"
 
+#include "test_env.hpp"
+
 #include <thread>
 #include <utility>
 
@@ -8,7 +10,7 @@ namespace telefacet::test {
 BlockingClient::BlockingClient(std::string address)
     : pool_(),
       client_(std::make_unique<net::WebSocketClient>(0, std::move(address),
-                                                      pool_)) {
+                                                      pool_, testSensor())) {
   client_->setOnConnection(
       [this](std::size_t i, bool c) { onConnection(i, c); });
   client_->setOnDiscovery(

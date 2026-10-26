@@ -52,7 +52,7 @@ void CameraGrid::sync() {
   }
 }
 
-void CameraGrid::render(bool show_focus_fom) {
+void CameraGrid::render(const ViewOptions& opts) {
   sync();
 
   // Streaming views in stable global-id order (roster is sorted).
@@ -75,9 +75,8 @@ void CameraGrid::render(bool show_focus_fom) {
   for (int i = 0; i < count; ++i) {
     const int c = i % cols;
     const int r = i / cols;
-    tiles[i]->uploadIfNew();
-    tiles[i]->drawWindow(origin.x + c * cw, origin.y + r * ch, cw, ch,
-                         show_focus_fom);
+    tiles[i]->uploadIfNew(opts.capture_view);
+    tiles[i]->drawWindow(origin.x + c * cw, origin.y + r * ch, cw, ch, opts);
   }
 }
 

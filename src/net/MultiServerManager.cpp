@@ -23,6 +23,16 @@ MultiServerManager::MultiServerManager(data::CameraStore& store,
     client->setOnTriggerResult([this](std::size_t idx, const TriggerResult& tr) {
       if (on_trigger_) on_trigger_(idx, tr);
     });
+    client->setOnStackResult([this](std::size_t idx, const StackResult& sr) {
+      if (on_stack_) on_stack_(idx, sr);
+    });
+    client->setOnCaptureRefused(
+        [this](std::size_t idx, CaptureKind kind, const std::string& msg) {
+          if (on_refused_) on_refused_(idx, kind, msg);
+        });
+    client->setOnCaptureFrame([this](std::size_t idx, const CaptureFrame& cf) {
+      onCaptureFrame(idx, cf);
+    });
     clients_.push_back(std::move(client));
   }
 }
@@ -39,7 +49,7 @@ void MultiServerManager::configureAll() {
   for (auto& c : clients_) {
     if (!c->connected()) continue;
     const auto& sc = cfg_.servers[c->serverIndex()];
-    c->configureCameras(sc.width, sc.height);
+    c->configureCameras(sc.width, sc.height, sc.raw);
   }
 }
 
@@ -74,15 +84,42 @@ void MultiServerManager::setSaveModeAll(const std::string& mode,
   }
 }
 
-std::size_t MultiServerManager::triggerCaptureAll(
-    std::optional<int> skip_frames) {
-  std::size_t sent = 0;
+std::vector<std::size_t> MultiServerManager::triggerCaptureAll(
+    std::optional<int> skip_frames, std::optional<bool> send_image) {
+  std::vector<std::size_t> sent;
   for (auto& c : clients_) {
     // camera_id omitted ⇒ the server arms every camera it has running, which
     // is what a multi-camera calibration pose needs.
-    if (c->connected() && c->triggerCapture(std::nullopt, skip_frames)) ++sent;
+    if (c->connected() &&
+        c->triggerCapture(std::nullopt, skip_frames, send_image))
+      sent.push_back(c->serverIndex());
   }
   return sent;
+}
+
+std::vector<std::size_t> MultiServerManager::stackCaptureAll(
+    const StackRequest& req) {
+  StackRequest all = req;
+  all.camera_id.reset();
+  std::vector<std::size_t> sent;
+  for (auto& c : clients_) {
+    // A server configured without `raw` would only refuse.
+    if (!c->connected() || !cfg_.servers[c->serverIndex()].raw) continue;
+    if (c->stackCapture(all)) sent.push_back(c->serverIndex());
+  }
+  return sent;
+}
+
+bool MultiServerManager::anyCaptureInProgress() const {
+  for (const auto& c : clients_)
+    if (c->connected() && c->captureInProgress()) return true;
+  return false;
+}
+
+bool MultiServerManager::anyRawConfigured() const {
+  for (const auto& s : cfg_.servers)
+    if (s.raw) return true;
+  return false;
 }
 
 void MultiServerManager::setHeaderOnlyAll(bool enabled) {
@@ -150,9 +187,8 @@ nlohmann::json MultiServerManager::savingParamsFromConfig(
     p["checkerboard_cols"] = s.checkerboard_cols;
     p["checkerboard_full_res_detection"] = s.checkerboard_full_res_detection;
     p["checkerboard_num_threads"] = s.checkerboard_num_threads;
-  }
-  if (m == "trigger") {
-    p["trigger_skip_frames"] = s.trigger_skip_frames;
+    if (s.checkerboard_subpix_window)
+      p["checkerboard_subpix_window"] = *s.checkerboard_subpix_window;
   }
   if (m == "aruco" || m == "aruco2x2") {
     p["aruco_full_res_detection"] = s.aruco_full_res_detection;
@@ -203,6 +239,17 @@ void MultiServerManager::onFrame(std::size_t server_index,
     return;
   }
   store_.publishFrame(info->global_id, std::move(buf));
+}
+
+void MultiServerManager::onCaptureFrame(std::size_t server_index,
+                                        const CaptureFrame& cf) {
+  std::optional<std::size_t> global_id;
+  std::shared_ptr<const data::Capture> stored;
+  if (auto* info = store_.findByServer(server_index, cf.frame->camera_id)) {
+    global_id = info->global_id;
+    stored = store_.publishCapture(info->global_id, cf.frame);
+  }
+  if (on_capture_frame_) on_capture_frame_(server_index, global_id, cf, stored);
 }
 
 }  // namespace telefacet::net

@@ -9,9 +9,13 @@ void CameraStore::clear() {
     std::lock_guard<std::mutex> lk(roster_mu_);
     roster_.clear();
   }
-  std::lock_guard<std::mutex> lk(slots_mu_);
-  slots_.clear();
-  stats_.clear();
+  {
+    std::lock_guard<std::mutex> lk(slots_mu_);
+    slots_.clear();
+    stats_.clear();
+  }
+  std::lock_guard<std::mutex> lk(captures_mu_);
+  captures_.clear();
 }
 
 std::size_t CameraStore::addCamera(std::size_t server_index,
@@ -43,6 +47,12 @@ void CameraStore::rebuildGlobalIdsSorted() {
                 return a.server_index < b.server_index;
               return a.local_camera_id < b.local_camera_id;
             });
+  {
+    // Global ids may have moved, so a capture keyed by one is no longer known
+    // to belong to that camera.
+    std::lock_guard<std::mutex> clk(captures_mu_);
+    captures_.clear();
+  }
   std::lock_guard<std::mutex> slk(slots_mu_);
   slots_.clear();
   for (std::size_t i = 0; i < roster_.size(); ++i) {
@@ -164,6 +174,29 @@ std::shared_ptr<FrameBuffer> CameraStore::consumeIfNew(
   if (it->second.seq == seen_seq_inout) return nullptr;
   seen_seq_inout = it->second.seq;
   return it->second.latest;
+}
+
+std::shared_ptr<const Capture> CameraStore::publishCapture(
+    std::size_t global_id, std::shared_ptr<const FrameBuffer> frame) {
+  auto c = std::make_shared<Capture>();
+  c->frame    = std::move(frame);
+  c->received = std::chrono::steady_clock::now();
+  std::lock_guard<std::mutex> lk(captures_mu_);
+  c->seq = ++capture_seq_;
+  captures_[global_id] = c;
+  return c;
+}
+
+std::shared_ptr<const Capture> CameraStore::lastCapture(
+    std::size_t global_id) const {
+  std::lock_guard<std::mutex> lk(captures_mu_);
+  auto it = captures_.find(global_id);
+  return it == captures_.end() ? nullptr : it->second;
+}
+
+std::size_t CameraStore::captureCount() const {
+  std::lock_guard<std::mutex> lk(captures_mu_);
+  return captures_.size();
 }
 
 CameraLiveStats* CameraStore::stats(std::size_t global_id) {

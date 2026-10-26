@@ -75,3 +75,6 @@ telefacet_e2e_out/
 
 # ImGui persisted window layout (runtime artifact)
 imgui.ini
+
+# Client-side captures (captures.dir default, runtime output)
+captures/

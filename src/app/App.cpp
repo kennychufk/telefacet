@@ -63,6 +63,7 @@ void App::initImGui() {
 void App::shutdown() {
   if (msm_) msm_->disconnectAll();
   msm_.reset();
+  capture_saver_.reset();  // writes what is still queued
   grid_.reset();
   panel_.reset();
   yuv_renderer_.reset();
@@ -103,18 +104,31 @@ int App::run() {
   initImGui();
 
   yuv_renderer_ = std::make_unique<gl::YuvRenderer>();
+  capture_saver_ = std::make_unique<data::CaptureSaver>(cfg_.captures.dir,
+                                                       cfg_.captures.save);
   msm_          = std::make_unique<net::MultiServerManager>(store_, cfg_);
   grid_         = std::make_unique<ui::CameraGrid>(store_, *yuv_renderer_);
-  panel_   = std::make_unique<ui::ControlPanel>(store_, *msm_);
+  panel_   = std::make_unique<ui::ControlPanel>(store_, *msm_, *capture_saver_);
+
+  // Every capture frame is saved as it arrives (on the receive thread; the
+  // saver queues it for its own writer thread).
+  msm_->setOnCaptureFrame(
+      [this](std::size_t server_index, std::optional<std::size_t>,
+             const net::CaptureFrame& cf,
+             std::shared_ptr<const data::Capture> stored) {
+        capture_saver_->save(cfg_.servers[server_index].address, cf.frame,
+                             cf.result, stored ? stored->save : nullptr);
+      });
 
   msm_->connectAll();
 
   while (!glfwWindowShouldClose(window_)) {
     glfwPollEvents();
 
-    // Hotkey: P toggles control panel.
-    if (ImGui::IsKeyPressed(ImGuiKey_P, false) && !ImGui::GetIO().WantTextInput) {
-      panel_->toggle();
+    // Hotkeys: P toggles the control panel, V live vs capture view.
+    if (!ImGui::GetIO().WantTextInput) {
+      if (ImGui::IsKeyPressed(ImGuiKey_P, false)) panel_->toggle();
+      if (ImGui::IsKeyPressed(ImGuiKey_V, false)) panel_->toggleCaptureView();
     }
 
     ImGui_ImplOpenGL3_NewFrame();
@@ -123,7 +137,7 @@ int App::run() {
 
     renderDockSpace();
     panel_->draw();
-    grid_->render(panel_->showFocusFom());
+    grid_->render(panel_->viewOptions());
 
     ImGui::Render();
     int fb_w, fb_h;

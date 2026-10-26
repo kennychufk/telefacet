@@ -8,7 +8,7 @@
 // against the server's own logs.
 //
 //   ./build/lowfps_repro <config.yaml> [seconds] [fps] [exposure_us] [dioptres]
-//                        [recover]
+//                        [recover] [triggers]
 //
 // Defaults mirror the report: 2 fps, 1000 µs shutter, 0 dpt, 180 s.
 // It prints a line per second (frames received, wire throughput, frame-id gaps)
@@ -18,6 +18,10 @@
 // documents for a capture timeout — stop_cameras, start_cameras, start_stream —
 // and report whether frames come back. Exercises that a stalled camera has not
 // been wedged out of its own lifecycle.
+//
+// `triggers` (default 0): fire that many trigger_captures before streaming,
+// the way a calibration rig does (move, settle, trigger), and report each
+// returned frame — triggering works in any process mode since protocol v8.
 
 #include <spdlog/spdlog.h>
 
@@ -52,7 +56,7 @@ int main(int argc, char** argv) {
   if (argc < 2) {
     std::fprintf(stderr,
                  "usage: %s <config.yaml> [seconds] [fps] [exposure_us] "
-                 "[dioptres]\n",
+                 "[dioptres] [recover] [triggers]\n",
                  argv[0]);
     return EXIT_FAILURE;
   }
@@ -62,6 +66,7 @@ int main(int argc, char** argv) {
   const int64_t exposure   = argc > 4 ? std::atoll(argv[4]) : 1000;
   const double  dioptres   = argc > 5 ? std::atof(argv[5]) : 0.0;
   const bool    recover    = argc > 6 ? std::atoi(argv[6]) != 0 : false;
+  const int     triggers   = argc > 7 ? std::atoi(argv[7]) : 0;
   const int64_t frame_dur  = static_cast<int64_t>(1e6 / fps);
 
   try {
@@ -89,19 +94,17 @@ int main(int argc, char** argv) {
 
     const auto cams = client.cameras();
 
-    // In trigger mode, exercise the shutter: this is the mode a calibration
-    // rig actually uses (move, settle, trigger), so a live run should prove a
-    // frame really lands on disk per trigger.
-    if (opts.save_mode == "trigger") {
-      for (int shot = 0; shot < 3; ++shot) {
-        const auto outcome = client.triggerCapture(10s);
-        spdlog::info("trigger {}: complete={} cancelled={} captures={}", shot,
-                     outcome.complete, outcome.cancelled,
-                     outcome.captures.size());
-        for (const auto& c : outcome.captures)
-          spdlog::info("  cam{} frame#{} -> {}", c.global_camera_id, c.frame_id,
-                       c.filename);
-      }
+    // Exercise the shutter: a live run should prove each trigger returns one
+    // whole frame per camera.
+    for (int shot = 0; shot < triggers; ++shot) {
+      const auto outcome = client.triggerCapture(15s);
+      spdlog::info("trigger {}: complete={} cancelled={} captures={}", shot,
+                   outcome.complete, outcome.cancelled, outcome.captures.size());
+      for (const auto& r : outcome.refusals) spdlog::warn("  refused: {}", r);
+      for (const auto& c : outcome.captures)
+        spdlog::info("  cam{} frame#{} {}x{} {} bytes", c.global_camera_id,
+                     c.frame_id, c.frame->width, c.frame->height,
+                     c.frame->data.size());
     }
 
     std::unordered_map<std::size_t, std::uint64_t> cursor;

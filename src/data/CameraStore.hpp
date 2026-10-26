@@ -27,6 +27,22 @@ struct CameraInfo {
   bool streaming = false;
 };
 
+// Whether the client has written a capture to its own disk (the server saves
+// none, protocol v8). Updated by whoever saves it — the GUI's CaptureSaver.
+enum class CaptureSaveState : int { NotSaved, Saving, Saved, Failed };
+
+// A camera's latest trigger / stack capture frame (frame_kind 2 / 1). Unlike a
+// live frame it is a still that stays until the next capture replaces it, so
+// it is held outside the frame pool.
+struct Capture {
+  std::shared_ptr<const FrameBuffer> frame;
+  std::chrono::steady_clock::time_point received;
+  std::uint64_t seq = 0;  // store-wide, one per capture
+  std::shared_ptr<std::atomic<CaptureSaveState>> save =
+      std::make_shared<std::atomic<CaptureSaveState>>(
+          CaptureSaveState::NotSaved);
+};
+
 struct CameraLiveStats {
   std::atomic<std::uint32_t> last_frame_id{0};
   std::atomic<std::uint32_t> frames_saved{0};
@@ -69,6 +85,13 @@ class CameraStore {
   std::shared_ptr<FrameBuffer> consumeIfNew(std::size_t global_id,
                                             std::uint64_t& seen_seq_inout);
 
+  // Capture frames: each camera keeps only its most recent one. Capture frames
+  // never pass through publishFrame, so they never count towards fps.
+  std::shared_ptr<const Capture> publishCapture(
+      std::size_t global_id, std::shared_ptr<const FrameBuffer> frame);
+  std::shared_ptr<const Capture> lastCapture(std::size_t global_id) const;
+  std::size_t captureCount() const;
+
   // Live stats accessor (returns nullptr if camera not present).
   CameraLiveStats* stats(std::size_t global_id);
 
@@ -86,6 +109,10 @@ class CameraStore {
   std::mutex slots_mu_;  // guards slots_ map operations
   std::unordered_map<std::size_t, Slot> slots_;
   std::unordered_map<std::size_t, std::unique_ptr<CameraLiveStats>> stats_;
+
+  mutable std::mutex captures_mu_;
+  std::unordered_map<std::size_t, std::shared_ptr<const Capture>> captures_;
+  std::uint64_t capture_seq_ = 0;
 
   FrameBufferPool pool_;
 };

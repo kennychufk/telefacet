@@ -5,15 +5,19 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+
+#include "net/Protocol.hpp"
 
 namespace telefacet::ui {
 
 namespace {
 
-const char* kSaveModes[] = {"none", "buffer", "batch", "trigger",
-                            "checkerboard", "checkerboard2x2", "aruco",
-                            "aruco2x2"};
+// Process modes are post-processing only (protocol v8); triggering and
+// stacking are commands that work in all of them.
+const char* kSaveModes[] = {"none", "buffer", "batch", "checkerboard",
+                            "checkerboard2x2", "aruco", "aruco2x2"};
 
 // Palette (mirrors the web client's --live / --accent / muted tones).
 const ImVec4 kGreen  = ImVec4(0.35f, 0.92f, 0.55f, 1.0f);
@@ -42,8 +46,9 @@ int stageIdx(ControlPanel::Stage s) {
 }  // namespace
 
 ControlPanel::ControlPanel(data::CameraStore& store,
-                           net::MultiServerManager& msm)
-    : store_(store), msm_(msm) {
+                           net::MultiServerManager& msm,
+                           data::CaptureSaver& saver)
+    : store_(store), msm_(msm), saver_(saver) {
   // Seed the save-mode selector + editable params from the loaded config so the
   // panel reflects what the YAML requested.
   const auto& s = msm_.savingConfig();
@@ -59,10 +64,27 @@ ControlPanel::ControlPanel(data::CameraStore& store,
   cb_cols_        = s.checkerboard_cols;
   cb_full_res_    = s.checkerboard_full_res_detection;
   cb_threads_     = s.checkerboard_num_threads;
+  if (s.checkerboard_subpix_window) cb_subpix_window_ = *s.checkerboard_subpix_window;
   aruco_full_res_      = s.aruco_full_res_detection;
   aruco_threads_       = s.aruco_num_threads;
   aruco_corner_refine_ = s.aruco_corner_refine;
   trigger_skip_frames_ = s.trigger_skip_frames;
+  stack_frames_      = s.stack_num_frames;
+  stack_exposure_ms_ = static_cast<float>(s.stack_exposure_time) / 1000.0f;
+  stack_gain_        = static_cast<float>(s.stack_analogue_gain);
+  stack_skip_        = s.stack_skip_frames;
+
+  msm_.setOnCaptureRefused(
+      [this](std::size_t server, net::CaptureKind kind, const std::string& m) {
+        std::lock_guard<std::mutex> lk(refusal_mu_);
+        refusal_ = std::string(net::captureKindName(kind)) + " refused by server " +
+                   std::to_string(server) + ": " + m;
+      });
+}
+
+std::string ControlPanel::refusalLine() const {
+  std::lock_guard<std::mutex> lk(refusal_mu_);
+  return refusal_;
 }
 
 bool ControlPanel::checkerboardMode() const {
@@ -73,10 +95,6 @@ bool ControlPanel::checkerboardMode() const {
 bool ControlPanel::arucoMode() const {
   const std::string m = kSaveModes[save_mode_idx_];
   return m == "aruco" || m == "aruco2x2";
-}
-
-bool ControlPanel::triggerMode() const {
-  return std::string(kSaveModes[save_mode_idx_]) == "trigger";
 }
 
 ControlPanel::Agg ControlPanel::computeAgg() const {
@@ -158,7 +176,8 @@ void ControlPanel::draw() {
   drawExposure(agg);
   drawFocus(agg);
   drawSaveMode();
-  drawTrigger(agg);
+  drawCapture(agg);
+  drawStack(agg);
 
   ImGui::End();
 }
@@ -502,13 +521,10 @@ void ControlPanel::drawSaveMode() {
     ImGui::Checkbox("full-res detection", &cb_full_res_);
     ImGui::SetNextItemWidth(120);
     ImGui::InputInt("detect threads", &cb_threads_);
-  }
-
-  if (triggerMode()) {
-    ImGui::SeparatorText("Trigger params");
     ImGui::SetNextItemWidth(120);
-    ImGui::InputInt("skip_frames", &trigger_skip_frames_);
-    ImGui::TextDisabled("frames discarded per camera before the kept one");
+    ImGui::InputInt("subpix window", &cb_subpix_window_);
+    ImGui::SetItemTooltip(
+        "cornerSubPix half-window, full-res px (0 = off); a stack uses half");
   }
 
   if (arucoMode()) {
@@ -529,32 +545,70 @@ void ControlPanel::drawSaveMode() {
     cb_cols_        = std::max(1, cb_cols_);
     cb_threads_     = std::max(1, cb_threads_);
     aruco_threads_  = std::clamp(aruco_threads_, 1, 4);
-    trigger_skip_frames_ = std::max(0, trigger_skip_frames_);
+    cb_subpix_window_ = std::clamp(cb_subpix_window_, 0, 100);
     msm_.setSaveModeAll(kSaveModes[save_mode_idx_], buildSaveParams());
-    // Remember what the servers are actually running: the combo alone is just
-    // an unapplied selection, and the trigger button must follow the former.
-    applied_save_mode_ = kSaveModes[save_mode_idx_];
   }
 }
 
-// Manual shutter button for the `trigger` process mode — the same request an
-// automated calibration rig issues once its arm has come to a complete stop.
-void ControlPanel::drawTrigger(const Agg& agg) {
-  const bool applied = applied_save_mode_ == "trigger";
-  // Show the section as soon as the mode is *selected* so the button is
-  // discoverable, but keep it inert until that mode has been pushed.
-  if (!applied && !triggerMode()) return;
+// trigger_capture (§4.17): the next frame of every running camera, in any
+// process mode — the same request an automated calibration rig issues once
+// its arm has come to a complete stop. The frames come back to this client.
+void ControlPanel::drawCapture(const Agg& agg) {
+  ImGui::SeparatorText("Capture");
 
-  ImGui::SeparatorText("Trigger");
+  int view = capture_view_ ? 1 : 0;
+  ImGui::RadioButton("Live", &view, 0);
+  ImGui::SameLine();
+  char cap_label[32];
+  std::snprintf(cap_label, sizeof(cap_label), "Capture (%zu)###capview",
+                store_.captureCount());
+  ImGui::RadioButton(cap_label, &view, 1);
+  ImGui::SameLine();
+  ImGui::TextDisabled("(V)");
+  capture_view_ = view == 1;
+  ImGui::Checkbox("Capture overlay", &capture_overlay_);
+  ImGui::SetItemTooltip("Draw the last capture's corners over the live frames (cyan)");
 
-  // Newest ack across the connected servers (each acks its own cameras).
+  const bool running = agg.stage == Stage::Running;
+  // The server runs one capture of either kind at a time, until its frames
+  // are sent, so the buttons wait for the frames, not just the ack.
+  const bool busy = msm_.anyCaptureInProgress();
+
+  ImGui::SetNextItemWidth(100);
+  if (ImGui::InputInt("skip frames", &trigger_skip_frames_))
+    trigger_skip_frames_ = std::clamp(trigger_skip_frames_, 0, 100);
+  ImGui::SetItemTooltip("Settling frames discarded per camera before the kept one");
+  ImGui::SameLine();
+  ImGui::Checkbox("send image##trig", &trigger_send_image_);
+  ImGui::SetItemTooltip("Off: the frames carry header and detection only");
+
+  ImGui::BeginDisabled(!running || busy);
+  if (ImGui::Button(busy ? "Capturing...###trigger" : "Trigger###trigger",
+                    ImVec2(-1, 0))) {
+    {
+      std::lock_guard<std::mutex> lk(refusal_mu_);
+      refusal_.clear();
+    }
+    last_fired_ = net::CaptureKind::Trigger;
+    if (!msm_.triggerCaptureAll(trigger_skip_frames_, trigger_send_image_).empty())
+      capture_view_ = true;
+  }
+  ImGui::EndDisabled();
+
+  // Newest trigger ack across the connected servers (each acks its own cameras).
   std::uint32_t newest_id = 0;
   std::size_t   captures  = 0;
   bool          any_ack   = false;
   bool          cancelled = false;
+  std::size_t   expected = 0, received = 0;
   for (std::size_t i = 0; i < msm_.serverCount(); ++i) {
     auto* c = msm_.client(i);
-    if (!c) continue;
+    if (!c || !c->connected()) continue;
+    const auto p = c->captureProgress();
+    if (p.in_progress) {
+      expected += p.expected;
+      received += p.received;
+    }
     const auto tr = c->lastTriggerResult();
     if (!tr.valid) continue;
     any_ack   = true;
@@ -562,29 +616,160 @@ void ControlPanel::drawTrigger(const Agg& agg) {
     captures += tr.captures.size();
     cancelled = cancelled || tr.cancelled;
   }
-  if (trigger_pending_ && any_ack && newest_id != trigger_baseline_id_)
-    trigger_pending_ = false;
-
-  const bool ready = applied && agg.stage == Stage::Running;
-  ImGui::BeginDisabled(!ready || trigger_pending_);
-  if (ImGui::Button("Trigger capture", ImVec2(-1, 0))) {
-    trigger_baseline_id_ = newest_id;
-    trigger_pending_ =
-        msm_.triggerCaptureAll(std::max(0, trigger_skip_frames_)) > 0;
-  }
-  ImGui::EndDisabled();
-
-  if (!applied) {
-    ImGui::TextDisabled("press \"Apply save mode\" to switch the servers to trigger");
-  } else if (agg.stage != Stage::Running) {
-    ImGui::TextDisabled("cameras must be running");
-  } else if (trigger_pending_) {
-    ImGui::TextColored(kAmber, "waiting for the triggered frame...");
+  const std::string refusal = refusalLine();
+  if (!running) {
+    ImGui::TextDisabled("start the cameras to capture");
+  } else if (busy) {
+    if (expected > 0)
+      ImGui::TextColored(kAmber, "receiving the captured frames (%zu/%zu)...",
+                         received, expected);
+    else
+      ImGui::TextColored(kAmber, "waiting for the capture...");
+  } else if (!refusal.empty()) {
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextColored(kRed, "%s", refusal.c_str());
+    ImGui::PopTextWrapPos();
   } else if (any_ack) {
     ImGui::TextColored(cancelled ? kAmber : kGreen, "trigger #%u: %zu frame(s)%s",
                        newest_id, captures, cancelled ? " (cancelled)" : "");
   } else {
-    ImGui::TextDisabled("saves one frame per running camera");
+    ImGui::TextDisabled("takes the next frame of every running camera");
+  }
+
+  // Client-side saving: the server keeps no copy of a capture.
+  bool save = saver_.enabled();
+  if (ImGui::Checkbox("Save captures", &save)) saver_.setEnabled(save);
+  const auto st = saver_.status();
+  if (save) {
+    ImGui::PushTextWrapPos(0.0f);
+    if (!st.last_error.empty())
+      ImGui::TextColored(kRed, "last save failed: %s", st.last_error.c_str());
+    else if (st.pending > 0)
+      ImGui::TextColored(kAmber, "saving %zu...", st.pending);
+    else if (st.saved > 0)
+      ImGui::TextDisabled("%zu saved%s - %s", st.saved,
+                          st.errors ? " (some failed)" : "", st.last_file.c_str());
+    else
+      ImGui::TextDisabled("saved to a new captures folder on the first capture");
+    ImGui::PopTextWrapPos();
+    if (!st.session_path.empty()) ImGui::SetItemTooltip("%s", st.session_path.c_str());
+  }
+}
+
+// stack_capture (§4.19): average raw frames per camera and detect on the
+// stack, with the process mode's detection.
+void ControlPanel::drawStack(const Agg& agg) {
+  if (!msm_.anyRawConfigured()) return;
+  ImGui::SeparatorText("Stack");
+
+  ImGui::SetNextItemWidth(100);
+  if (ImGui::InputInt("frames", &stack_frames_))
+    stack_frames_ = std::clamp(stack_frames_, 1, 1024);
+  ImGui::SetItemTooltip("Raw frames averaged per camera. Corner scatter falls as 1/sqrt(N).");
+  ImGui::SetNextItemWidth(100);
+  if (ImGui::InputFloat("exposure (ms)", &stack_exposure_ms_, 0, 0, "%.1f"))
+    stack_exposure_ms_ = std::clamp(stack_exposure_ms_, 0.0f, 10000.0f);
+  ImGui::SetItemTooltip("Pinned for the stack, then restored; 0 keeps the preview's");
+  ImGui::SetNextItemWidth(100);
+  if (ImGui::InputFloat("gain", &stack_gain_, 0, 0, "%.2f"))
+    stack_gain_ = stack_gain_ <= 0.0f ? 0.0f : std::clamp(stack_gain_, 1.0f, 64.0f);
+  ImGui::SetItemTooltip("1-64; 0: 1.0 with a pinned exposure, else the preview's");
+  ImGui::SetNextItemWidth(100);
+  if (ImGui::InputInt("skip##stack", &stack_skip_))
+    stack_skip_ = std::clamp(stack_skip_, 0, 100);
+  ImGui::SetItemTooltip("Frames discarded after the pinned settings arrive, before summing");
+  ImGui::SameLine();
+  ImGui::Checkbox("send image##stack", &stack_send_image_);
+
+  const bool running = agg.stage == Stage::Running;
+  const bool busy = msm_.anyCaptureInProgress();
+  const bool stacking = busy && last_fired_ == net::CaptureKind::Stack;
+  char label[48];
+  if (stacking)
+    std::snprintf(label, sizeof(label), "Stacking... %.0fs###stack",
+                  ImGui::GetTime() - stack_fired_at_);
+  else
+    std::snprintf(label, sizeof(label), "Stack###stack");
+  ImGui::BeginDisabled(!running || busy);
+  if (ImGui::Button(label, ImVec2(-1, 0))) {
+    {
+      std::lock_guard<std::mutex> lk(refusal_mu_);
+      refusal_.clear();
+    }
+    net::StackRequest req;
+    req.num_frames  = stack_frames_;
+    req.skip_frames = stack_skip_;
+    if (stack_exposure_ms_ > 0)
+      req.exposure_time_us = static_cast<std::int64_t>(std::lround(stack_exposure_ms_ * 1000.0));
+    if (stack_gain_ > 0) req.analogue_gain = stack_gain_;
+    req.send_image = stack_send_image_;
+    last_fired_ = net::CaptureKind::Stack;
+    stack_fired_at_ = ImGui::GetTime();
+    if (!msm_.stackCaptureAll(req).empty()) capture_view_ = true;
+  }
+  ImGui::EndDisabled();
+  if (!running) ImGui::TextDisabled("start the cameras to stack");
+  else if (busy && !stacking) ImGui::TextDisabled("waiting for the capture in progress...");
+
+  // The latest stack_result of each server: one line per camera.
+  for (std::size_t i = 0; i < msm_.serverCount(); ++i) {
+    auto* c = msm_.client(i);
+    if (!c) continue;
+    const auto sr = c->lastStackResult();
+    if (!sr.valid) continue;
+    ImGui::TextDisabled("server %zu: stack #%u%s", i, sr.stack_id,
+                        sr.cancelled ? " (cancelled)" : "");
+    for (const auto& sc : sr.captures) {
+      const auto* info = store_.findByServer(i, sc.camera_id);
+      const std::string cam = info ? info->label : "cam?" + std::to_string(sc.camera_id);
+      if (!sc.error.empty()) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(kRed, "%s: %s", cam.c_str(), sc.error.c_str());
+        ImGui::PopTextWrapPos();
+        continue;
+      }
+      // The detection rides on the stacked image (§5.9), not on stack_result:
+      // the camera's last capture, if it is this stack.
+      std::string found = "image...";
+      if (info) {
+        const auto capd = store_.lastCapture(info->global_id);
+        const auto* f = capd ? capd->frame.get() : nullptr;
+        if (f && f->frame_kind == static_cast<std::uint8_t>(proto::FrameKind::Stack) &&
+            f->capture_id == static_cast<std::uint16_t>(sr.stack_id)) {
+          if (f->detection_kind == 0) {
+            found = "no detect";
+          } else if (f->detection_kind == 2) {
+            found = std::to_string(f->aruco_markers.size()) + " markers";
+          } else {
+            std::size_t n = 0;
+            for (const auto& cs : f->corner_sets) n += cs.corners.size();
+            found = std::to_string(n) + " corners";
+          }
+        }
+      }
+      ImGui::Text("%s  %d fr  %.1f ms  x%.2f  %s", cam.c_str(), sc.frames_stacked,
+                  sc.exposure_time / 1000.0, sc.analogue_gain, found.c_str());
+      // Board white against the ~0.8 of full scale worth aiming for.
+      const ImVec4 col = sc.clipped_fraction > 0 ? kRed
+                         : sc.white_fraction < 0.8 ? kAmber : kGreen;
+      char overlay[48];
+      std::snprintf(overlay, sizeof(overlay), "white %.0f%%%s",
+                    sc.white_fraction * 100.0,
+                    sc.clipped_fraction > 0 ? " - clipped"
+                    : sc.white_fraction < 0.8 ? " - dim: lengthen exposure" : "");
+      ImGui::PushStyleColor(ImGuiCol_PlotHistogram, col);
+      ImGui::ProgressBar(static_cast<float>(std::clamp(sc.white_fraction, 0.0, 1.0)),
+                         ImVec2(-1, 0), overlay);
+      ImGui::PopStyleColor();
+      ImGui::SetItemTooltip(
+          "frames %u-%u: %d summed, %d rejected, %d settling\n"
+          "white %.1f%%, peak %.1f%%, clipped %.3f%%\n%d-bit, black %.0f\n"
+          "summing %.1f ms/frame",
+          sc.first_frame_id, sc.last_frame_id, sc.frames_stacked,
+          sc.frames_rejected, sc.settle_frames, sc.white_fraction * 100,
+          sc.peak_fraction * 100, sc.clipped_fraction * 100, sc.bit_depth,
+          sc.black_level, sc.accumulate_ms);
+    }
   }
 }
 
@@ -607,14 +792,12 @@ nlohmann::json ControlPanel::buildSaveParams() const {
     p["checkerboard_cols"] = cb_cols_;
     p["checkerboard_full_res_detection"] = cb_full_res_;
     p["checkerboard_num_threads"] = cb_threads_;
+    p["checkerboard_subpix_window"] = cb_subpix_window_;
   }
   if (arucoMode()) {
     p["aruco_full_res_detection"] = aruco_full_res_;
     p["aruco_num_threads"] = aruco_threads_;
     p["aruco_corner_refine"] = aruco_corner_refine_;
-  }
-  if (triggerMode()) {
-    p["trigger_skip_frames"] = trigger_skip_frames_;
   }
   return p;
 }

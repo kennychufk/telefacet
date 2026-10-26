@@ -14,8 +14,12 @@ stays in sync with the server.
 | `e2e_lifecycle_test.cpp` | connect → discover → configure → start → stream → stop |
 | `e2e_protocol_test.cpp` | CHUN/CHNK frame metadata, header-only mode, monotonic counters |
 | `e2e_save_mode_test.cpp` | NONE / BUFFER / BATCH / CHECKERBOARD on-disk effects |
+| `e2e_capture_test.cpp` | trigger / stack captures (v8): frames returned to the client, send_image vs header-only, refusals, headless `Client` |
+| `unit_protocol_parse_test.cpp` | byte-level ChunkReassembler parsing (no server) |
+| `unit_capture_test.cpp` | stacked-image helpers and `CaptureSaver` files (no server) |
 | `e2e_config_loader_test.cpp` | YAML config parsing (no network) |
 | `fixtures/test_config.yaml` | Sample config for the loader test |
+| `fixtures/capture_config.yaml` | `raw`, `stack_*`, `captures:` for the loader test |
 
 ## Build
 
@@ -40,6 +44,11 @@ cmake --build build
 # Server must be up and connected to IMX519 cameras.
 TELEFACET_WS_URL=ws://pi.local:9001 ./build/tests/telefacet_e2e_tests
 
+# A sensor without the default 1456x1088 mode (e.g. an IMX477):
+TELEFACET_WS_URL=ws://192.168.1.66:9001 TELEFACET_TEST_SENSOR=imx477 \
+  TELEFACET_TEST_WIDTH=2028 TELEFACET_TEST_HEIGHT=1520 \
+  ./build/tests/telefacet_e2e_tests
+
 # Or via ctest:
 ctest --test-dir build -L e2e --output-on-failure
 ```
@@ -47,7 +56,9 @@ ctest --test-dir build -L e2e --output-on-failure
 The save-mode tests write files to `./telefacet_e2e_out/<label>/` under the
 current working directory — the server must be able to resolve that path
 (the server is the writer). When the server is on a different host,
-`--gtest_filter=-*SaveMode*` to skip them.
+`--gtest_filter=-*SaveMode*` to skip them. The capture tests need no shared
+path (the frames come back over the socket); the stacking ones skip themselves
+when the server cannot configure the raw stream.
 
 ## Notes
 

@@ -2,6 +2,10 @@
 
 // Owns one camera's YUV420 plane textures, output FBO and the per-frame
 // upload+draw path. Drawn inside an ImGui window.
+//
+// The tile shows either the live stream or, in capture view, the camera's
+// last trigger / stack capture (protocol §5.9) — a still, drawn into the FBO
+// once. Live frames keep their readouts current meanwhile but are not drawn.
 
 #include <glad/glad.h>
 
@@ -17,6 +21,13 @@
 
 namespace telefacet::ui {
 
+// Per-frame display options, shared by every tile.
+struct ViewOptions {
+  bool show_focus_fom  = false;  // FoM readout + history curve + region
+  bool capture_view    = false;  // show each camera's last capture
+  bool capture_overlay = false;  // last capture's corners over live frames
+};
+
 class CameraView {
  public:
   CameraView(std::size_t global_id, data::CameraStore& store,
@@ -28,20 +39,26 @@ class CameraView {
 
   std::size_t globalId() const { return global_id_; }
 
-  // Pull the latest frame (if any) and upload it to the GL texture. Called
-  // once per UI frame on the GL thread.
-  void uploadIfNew();
+  // Pull the latest frame (if any) and upload it to the GL texture — or, in
+  // capture view, draw the camera's last capture if it changed. Called once
+  // per UI frame on the GL thread, before drawWindow().
+  void uploadIfNew(bool capture_view = false);
 
   // Draw the ImGui window for this camera (image + overlays) pinned to the
-  // grid cell (x, y, w, h) in screen coords. `show_focus_fom` adds the FoM
-  // readout + history curve and the FoM-region outline. Returns false if the
-  // window has been closed.
+  // grid cell (x, y, w, h) in screen coords. Returns false if the window has
+  // been closed.
   bool drawWindow(float x, float y, float w, float h,
-                  bool show_focus_fom = false);
+                  const ViewOptions& opts = {});
 
  private:
+  enum class FboContent { None, Live, Capture };
+
   void ensureFbo(int w, int h);
   void ensureYuvTextures(int bytes_per_line, int height);
+  // Upload one I420 image to the plane textures and render it into the FBO.
+  void renderYuv(const std::uint8_t* data, int width, int height, int bpl);
+  // Draw a capture into the FBO: a trigger frame as YUV, a stack as gray.
+  void renderCapture(const data::Capture& cap);
 
   std::size_t          global_id_;
   data::CameraStore&   store_;
@@ -68,7 +85,11 @@ class CameraView {
   std::uint32_t frame_id_   = 0;
   std::uint32_t frames_saved_ = 0;
   bool          header_only_ = false;
-  bool          have_image_  = false;
+  // What the FBO holds. Back in live view after a capture, the tile shows
+  // no image until the next live frame repaints it.
+  FboContent    fbo_content_ = FboContent::None;
+  std::uint64_t capture_seq_shown_ = 0;  // Capture::seq in the FBO
+  std::vector<std::uint8_t> stack_i420_;  // scratch: stack as gray I420
 
   // v3/v5/v7 per-frame metadata for the lens/AF/FoM + corner overlays.
   std::uint64_t timestamp_us_      = 0;

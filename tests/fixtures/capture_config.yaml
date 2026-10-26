@@ -1,0 +1,27 @@
+# Fixture config used by e2e_config_loader_test.cpp for on-demand captures
+# (protocol v8): trigger_capture and stack_capture work in any process mode,
+# so their defaults are parsed whatever the mode is.
+
+servers:
+  - address: ws://localhost:9001
+    sensor: imx477
+    width: 2028
+    height: 1520
+    # The raw Bayer stream stack_capture averages.
+    raw: true
+  - address: ws://localhost:9002
+
+processing:
+  mode: checkerboard
+  save_frames: false
+  checkerboard_subpix_window: 40
+  # Non-default values throughout, so the loader test proves each is parsed.
+  trigger_skip_frames: 2
+  stack_num_frames: 32
+  stack_exposure_time: 50000
+  stack_analogue_gain: 1.5
+  stack_skip_frames: 3
+
+captures:
+  save: false
+  dir: calibration_captures

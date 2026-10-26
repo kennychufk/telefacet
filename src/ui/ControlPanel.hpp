@@ -9,20 +9,26 @@
 //   Exposure  — auto AE vs manual shutter + frame-duration lock
 //   Focus     — continuous AF vs manual lens position
 //   Save mode — mode selector + live-editable saving params
+//   Capture   — Live/Capture view, trigger_capture, client-side capture saving
+//   Stack     — stack_capture params + per-camera results (servers with `raw`)
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
 #include "data/CameraStore.hpp"
+#include "data/CaptureSaver.hpp"
 #include "net/MultiServerManager.hpp"
+#include "ui/CameraView.hpp"
 
 namespace telefacet::ui {
 
 class ControlPanel {
  public:
-  ControlPanel(data::CameraStore& store, net::MultiServerManager& msm);
+  ControlPanel(data::CameraStore& store, net::MultiServerManager& msm,
+               data::CaptureSaver& saver);
 
   void draw();
 
@@ -30,6 +36,12 @@ class ControlPanel {
   // Client-side display option: per-view FoM readout + history curve.
   bool showFocusFom() const { return show_focus_fom_; }
   void toggle()        { visible_ = !visible_; }
+  // Tiles show live frames, or each camera's last trigger / stack capture.
+  // Firing a capture switches to the capture view.
+  void toggleCaptureView() { capture_view_ = !capture_view_; }
+  ViewOptions viewOptions() const {
+    return {show_focus_fom_, capture_view_, capture_overlay_};
+  }
 
   // Aggregate pipeline stage across the connected servers (mirrors the web
   // client's appState: null → connected → configured → running).
@@ -54,8 +66,12 @@ class ControlPanel {
   void drawExposure(const Agg& agg);
   void drawFocus(const Agg& agg);
   void drawSaveMode();
-  // Manual shutter for the `trigger` process mode; hidden in every other mode.
-  void drawTrigger(const Agg& agg);
+  // Live/Capture view, the trigger button and capture saving.
+  void drawCapture(const Agg& agg);
+  // stack_capture, shown when the config gives some server the raw stream.
+  void drawStack(const Agg& agg);
+  // Why the last capture request was refused, if it was ("" otherwise).
+  std::string refusalLine() const;
 
   void advance(const Agg& agg, const std::vector<data::CameraInfo>& roster);
   void retreat(const Agg& agg);
@@ -67,10 +83,10 @@ class ControlPanel {
   nlohmann::json buildSaveParams() const;
   bool checkerboardMode() const;
   bool arucoMode() const;
-  bool triggerMode() const;
 
   data::CameraStore&        store_;
   net::MultiServerManager&  msm_;
+  data::CaptureSaver&       saver_;
   bool                      visible_ = true;
   bool                      header_only_ = false;
   bool                      show_focus_fom_ = false;
@@ -86,16 +102,29 @@ class ControlPanel {
   int  cb_cols_             = 11;
   bool cb_full_res_         = false;
   int  cb_threads_          = 4;
+  int  cb_subpix_window_    = 15;   // server default
   bool aruco_full_res_      = false;
   int  aruco_threads_       = 4;
   bool aruco_corner_refine_ = false;
-  int  trigger_skip_frames_ = 0;
 
-  // Trigger section state. The combo alone is only a selection, so the button
-  // keys off the mode last pushed with "Apply save mode".
-  std::string   applied_save_mode_;
-  bool          trigger_pending_     = false;  // request sent, ack outstanding
-  std::uint32_t trigger_baseline_id_ = 0;      // newest ack id when we fired
+  // Capture section state.
+  bool   capture_view_       = false;
+  bool   capture_overlay_    = false;
+  int    trigger_skip_frames_ = 0;
+  bool   trigger_send_image_ = true;
+  // Stack request params (seeded from processing.stack_*); 0 exposure / gain
+  // keeps the preview's.
+  int    stack_frames_       = 16;
+  float  stack_exposure_ms_  = 0.0f;
+  float  stack_gain_         = 0.0f;
+  int    stack_skip_         = 0;
+  bool   stack_send_image_   = true;
+  double stack_fired_at_     = -1.0;  // ImGui time of the last Stack press
+  // What the last press fired, and a refusal reported for it. The refusal
+  // arrives on a receive thread.
+  net::CaptureKind  last_fired_ = net::CaptureKind::Trigger;
+  mutable std::mutex refusal_mu_;
+  std::string        refusal_;
 
   // Focus control state. focus_manual_ false ⇒ continuous AF (sends -1).
   bool  focus_manual_ = false;
