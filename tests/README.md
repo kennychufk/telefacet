@@ -14,6 +14,7 @@ stays in sync with the server.
 | `e2e_lifecycle_test.cpp` | connect → discover → configure → start → stream → stop |
 | `e2e_protocol_test.cpp` | CHUN/CHNK frame metadata, header-only mode, monotonic counters |
 | `e2e_save_mode_test.cpp` | NONE / BUFFER / BATCH / CHECKERBOARD on-disk effects |
+| `e2e_sensor_switch_test.cpp` | switching sensors without a restart: `discover` on one connection, and the GUI's Load (close the session while streaming, open the other config's at once). Opt-in, needs two sensors |
 | `e2e_capture_test.cpp` | trigger / stack captures (v8): frames returned to the client, send_image vs header-only, refusals, headless `Client` |
 | `unit_protocol_parse_test.cpp` | byte-level ChunkReassembler parsing (no server) |
 | `unit_capture_test.cpp` | stacked-image helpers and `CaptureSaver` files (no server) |
@@ -48,6 +49,13 @@ TELEFACET_WS_URL=ws://pi.local:9001 ./build/tests/telefacet_e2e_tests
 TELEFACET_WS_URL=ws://192.168.1.66:9001 TELEFACET_TEST_SENSOR=imx477 \
   TELEFACET_TEST_WIDTH=2028 TELEFACET_TEST_HEIGHT=1520 \
   ./build/tests/telefacet_e2e_tests
+
+# Switching between two sensors on one server (the SensorSwitch tests skip
+# themselves unless TELEFACET_TEST_SENSOR2 is set; sizes must be native modes):
+TELEFACET_WS_URL=ws://192.168.1.66:9001 \
+  TELEFACET_TEST_SENSOR=imx477 TELEFACET_TEST_WIDTH=2028 TELEFACET_TEST_HEIGHT=1520 \
+  TELEFACET_TEST_SENSOR2=imx708 TELEFACET_TEST_WIDTH2=1536 TELEFACET_TEST_HEIGHT2=864 \
+  ./build/tests/telefacet_e2e_tests --gtest_filter='SensorSwitch.*'
 
 # Or via ctest:
 ctest --test-dir build -L e2e --output-on-failure

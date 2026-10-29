@@ -3,6 +3,7 @@
 // ImGui control window — ports telefacet-web's pipeline state-machine UX plus
 // focus / exposure / frame-duration controls driven by the server-reported
 // limits. Sections:
+//   Config    — the loaded YAML; load another (switches sensors, no restart)
 //   Servers   — per-server connection + state
 //   Pipeline  — Discover→Configure→Start→Stream advance/retreat state machine
 //   Cameras   — per-camera stream toggles, fps, saved-frame count
@@ -14,6 +15,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -31,6 +33,13 @@ class ControlPanel {
                data::CaptureSaver& saver);
 
   void draw();
+
+  // The YAML this panel's session came from, and how to load another one (the
+  // app swaps the whole session; this panel is replaced along with it).
+  using LoadConfigFn = std::function<void(std::string /*path*/)>;
+  void setConfig(const std::string& path, LoadConfigFn load);
+  // Why the last load failed; the current session is kept.
+  void setConfigError(std::string error) { config_error_ = std::move(error); }
 
   bool visible() const { return visible_; }
   // Client-side display option: per-view FoM readout + history curve.
@@ -57,6 +66,7 @@ class ControlPanel {
   Agg computeAgg() const;
 
   // Section renderers.
+  void drawConfig();
   void drawServers(const Agg& agg);
   void drawPipeline(const Agg& agg,
                     const std::vector<data::CameraInfo>& roster);
@@ -88,6 +98,13 @@ class ControlPanel {
   net::MultiServerManager&  msm_;
   data::CaptureSaver&       saver_;
   bool                      visible_ = true;
+
+  // Config section.
+  std::string               config_path_;
+  char                      config_input_[512] = {};
+  LoadConfigFn              load_config_;
+  std::string               config_error_;
+
   bool                      header_only_ = false;
   bool                      show_focus_fom_ = false;
   int                       save_mode_idx_ = 0;

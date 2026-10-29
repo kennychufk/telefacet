@@ -9,6 +9,7 @@ add_executable(telefacet_e2e_tests
   e2e_save_mode_test.cpp
   e2e_capture_test.cpp
   e2e_config_loader_test.cpp
+  e2e_sensor_switch_test.cpp
   unit_protocol_parse_test.cpp
   unit_capture_test.cpp
 )

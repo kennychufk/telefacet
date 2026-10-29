@@ -62,6 +62,7 @@ class CaptureSaver {
   CaptureSaver(const CaptureSaver&) = delete;
   CaptureSaver& operator=(const CaptureSaver&) = delete;
 
+  const std::string& root() const { return root_; }
   void setEnabled(bool on) { enabled_.store(on); }
   bool enabled() const { return enabled_.load(); }
 

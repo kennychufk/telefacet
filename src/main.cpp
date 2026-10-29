@@ -18,7 +18,7 @@ int main(int argc, char** argv) {
   try {
     auto cfg = telefacet::config::loadFromFile(argv[1]);
     spdlog::info("loaded config: {} server(s)", cfg.servers.size());
-    telefacet::app::App app(std::move(cfg));
+    telefacet::app::App app(std::move(cfg), argv[1]);
     return app.run();
   } catch (const std::exception& e) {
     spdlog::critical("fatal: {}", e.what());

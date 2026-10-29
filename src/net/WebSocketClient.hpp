@@ -194,6 +194,11 @@ class WebSocketClient {
   void stop();    // graceful shutdown
 
   bool connected() const { return connected_.load(); }
+  // The last connection attempt was refused with HTTP 503: another commander
+  // holds the server (protocol §1.1). Cleared on connect.
+  bool commanderSlotTaken() const { return slot_taken_.load(); }
+  // Upgrades refused with 503 since construction.
+  int refusedUpgrades() const { return refused_upgrades_.load(); }
   std::size_t serverIndex() const { return server_index_; }
   const std::string& address() const { return address_; }
   const std::vector<DiscoveredCamera>& cameras() const { return cameras_; }
@@ -304,6 +309,8 @@ class WebSocketClient {
 
   std::atomic<bool>            connected_{false};
   std::atomic<bool>            header_only_{false};
+  std::atomic<bool>            slot_taken_{false};
+  std::atomic<int>             refused_upgrades_{0};
 
   std::vector<DiscoveredCamera> cameras_;
   std::mutex                    cameras_mu_;

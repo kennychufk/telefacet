@@ -188,6 +188,7 @@ void WebSocketClient::onMessage(const ix::WebSocketMessagePtr& msg) {
   switch (msg->type) {
     case ix::WebSocketMessageType::Open:
       connected_.store(true);
+      slot_taken_.store(false);
       resetCaptures();
       spdlog::info("[ws#{}] connected", server_index_);
       if (on_conn_) on_conn_(server_index_, true);
@@ -212,6 +213,8 @@ void WebSocketClient::onMessage(const ix::WebSocketMessagePtr& msg) {
       // ixwebsocket keeps retrying with backoff, so this repeats until the
       // other commander leaves.
       if (msg->errorInfo.http_status == 503) {
+        slot_taken_.store(true);
+        refused_upgrades_.fetch_add(1);
         spdlog::error("[ws#{}] upgrade refused (HTTP 503): the server already "
                       "has a commander client; retrying",
                       server_index_);

@@ -8,7 +8,9 @@
 #include <imgui_impl_opengl3.h>
 #include <spdlog/spdlog.h>
 
+#include <exception>
 #include <stdexcept>
+#include <utility>
 
 namespace telefacet::app {
 
@@ -20,7 +22,8 @@ void glfwErrorCallback(int code, const char* desc) {
 
 }  // namespace
 
-App::App(config::Config cfg) : cfg_(std::move(cfg)) {}
+App::App(config::Config cfg, std::string config_path)
+    : cfg_(std::move(cfg)), config_path_(std::move(config_path)) {}
 
 App::~App() { shutdown(); }
 
@@ -41,6 +44,12 @@ void App::initWindow() {
   }
   glfwMakeContextCurrent(window_);
   glfwSwapInterval(1);
+
+  // A YAML dropped on the window is loaded like one picked in the panel.
+  glfwSetWindowUserPointer(window_, this);
+  glfwSetDropCallback(window_, [](GLFWwindow* w, int count, const char** paths) {
+    if (count > 0) static_cast<App*>(glfwGetWindowUserPointer(w))->requestConfig(paths[0]);
+  });
 
   if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
     throw std::runtime_error("gladLoadGLLoader failed");
@@ -99,16 +108,12 @@ void App::renderDockSpace() {
   ImGui::End();
 }
 
-int App::run() {
-  initWindow();
-  initImGui();
-
-  yuv_renderer_ = std::make_unique<gl::YuvRenderer>();
-  capture_saver_ = std::make_unique<data::CaptureSaver>(cfg_.captures.dir,
-                                                       cfg_.captures.save);
-  msm_          = std::make_unique<net::MultiServerManager>(store_, cfg_);
-  grid_         = std::make_unique<ui::CameraGrid>(store_, *yuv_renderer_);
-  panel_   = std::make_unique<ui::ControlPanel>(store_, *msm_, *capture_saver_);
+void App::openSession() {
+  msm_   = std::make_unique<net::MultiServerManager>(store_, cfg_);
+  grid_  = std::make_unique<ui::CameraGrid>(store_, *yuv_renderer_);
+  panel_ = std::make_unique<ui::ControlPanel>(store_, *msm_, *capture_saver_);
+  panel_->setConfig(config_path_,
+                    [this](std::string path) { requestConfig(std::move(path)); });
 
   // Every capture frame is saved as it arrives (on the receive thread; the
   // saver queues it for its own writer thread).
@@ -121,9 +126,66 @@ int App::run() {
       });
 
   msm_->connectAll();
+}
+
+void App::requestConfig(std::string path) { pending_config_ = std::move(path); }
+
+void App::loadPendingConfig() {
+  if (pending_config_.empty()) return;
+  const std::string path = std::exchange(pending_config_, {});
+
+  // Parse before touching anything: a bad file keeps the current session.
+  config::Config next;
+  try {
+    next = config::loadFromFile(path);
+  } catch (const std::exception& e) {
+    spdlog::error("could not load {}: {}", path, e.what());
+    panel_->setConfigError(path + ": " + e.what());
+    return;
+  }
+  spdlog::info("loading config {}: {} server(s)", path, next.servers.size());
+
+  // Close the current connections first, and for good: each server has one
+  // commander slot, and the new config's connection to the same server would
+  // be refused (503) while the old one held it. stop() is synchronous and
+  // turns off the automatic reconnection, so once it returns the server has
+  // seen the close and nothing will reconnect. The new connection's discover
+  // then names the new sensor, and the server releases the cameras of the old
+  // one (cherupi-v4l2 protocol §4.1). The cameras are left as they are, as a
+  // disconnect always leaves them: loading the same config again finds them
+  // still running.
+  const bool panel_visible = panel_->visible();
+  msm_->disconnectAll();
+  panel_.reset();
+  grid_.reset();
+  msm_.reset();
+  store_.clear();
+
+  if (next.captures.dir != capture_saver_->root())
+    capture_saver_ = std::make_unique<data::CaptureSaver>(next.captures.dir,
+                                                         next.captures.save);
+  else
+    capture_saver_->setEnabled(next.captures.save);
+
+  cfg_         = std::move(next);
+  config_path_ = path;
+  openSession();
+  if (!panel_visible) panel_->toggle();
+}
+
+int App::run() {
+  initWindow();
+  initImGui();
+
+  yuv_renderer_ = std::make_unique<gl::YuvRenderer>();
+  capture_saver_ = std::make_unique<data::CaptureSaver>(cfg_.captures.dir,
+                                                       cfg_.captures.save);
+  openSession();
 
   while (!glfwWindowShouldClose(window_)) {
     glfwPollEvents();
+    // Between frames: the views and the panel are rebuilt for the new config.
+    loadPendingConfig();
 
     // Hotkeys: P toggles the control panel, V live vs capture view.
     if (!ImGui::GetIO().WantTextInput) {

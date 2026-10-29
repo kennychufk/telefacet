@@ -2,6 +2,11 @@
 
 // Top-level application: owns GLFW window, GL context, ImGui, the
 // CameraStore, the MultiServerManager, and the UI controller objects.
+//
+// Another YAML can be loaded while the app runs (the panel's Config section,
+// or a file dropped on the window) — e.g. to move the same Pi from an IMX477
+// to an IMX708 config. The server has one commander slot, so the current
+// connections are closed before the new config's open (see loadPendingConfig).
 
 #include <memory>
 #include <string>
@@ -20,7 +25,8 @@ namespace telefacet::app {
 
 class App {
  public:
-  explicit App(config::Config cfg);
+  // `config_path` is the file `cfg` came from, shown in the panel.
+  App(config::Config cfg, std::string config_path);
   ~App();
 
   int run();
@@ -30,8 +36,15 @@ class App {
   void initImGui();
   void shutdown();
   void renderDockSpace();
+  // msm_, grid_ and panel_ for cfg_, and connect.
+  void openSession();
+  // Load another YAML; applied by loadPendingConfig() between frames.
+  void requestConfig(std::string path);
+  void loadPendingConfig();
 
   config::Config         cfg_;
+  std::string            config_path_;
+  std::string            pending_config_;  // empty ⇒ no load requested
   GLFWwindow*            window_ = nullptr;
   data::CameraStore      store_;
   std::unique_ptr<net::MultiServerManager> msm_;

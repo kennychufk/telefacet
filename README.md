@@ -64,6 +64,21 @@ control panel to `Configure`, `Start cameras`, then toggle individual
 streams. Press **P** to hide/show the control panel, **V** to switch the
 tiles between live frames and the last captures.
 
+### Loading another config
+
+Another YAML can be loaded without restarting: type its path in the panel's
+**Config** section and press **Load** (or Enter), or drop the file on the
+window. That is how the same Pi moves between sensors, e.g. from an IMX477
+config to an IMX708 one. The new file is read first (a bad one is reported
+there and the current session kept), then the current connections are closed
+for good and the new config's opened. The server has one commander slot, so
+the old connection is gone before the new one asks for it. The new
+connection's `discover` names its sensor: a server whose sensor changes
+releases its cameras (configure and start again), and one whose sensor stays
+keeps them running, so you only reopen the streams. A server that refuses the
+connection because another commander holds it shows
+`[refused: another commander]` under **Servers**.
+
 ### Client role
 
 The server distinguishes two client roles (protocol §1.1): one read-write

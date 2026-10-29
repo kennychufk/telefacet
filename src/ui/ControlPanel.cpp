@@ -82,6 +82,12 @@ ControlPanel::ControlPanel(data::CameraStore& store,
       });
 }
 
+void ControlPanel::setConfig(const std::string& path, LoadConfigFn load) {
+  config_path_ = path;
+  std::snprintf(config_input_, sizeof(config_input_), "%s", path.c_str());
+  load_config_ = std::move(load);
+}
+
 std::string ControlPanel::refusalLine() const {
   std::lock_guard<std::mutex> lk(refusal_mu_);
   return refusal_;
@@ -169,6 +175,7 @@ void ControlPanel::draw() {
   const auto roster = store_.snapshot();
   refreshLimits(agg);
 
+  drawConfig();
   drawServers(agg);
   drawPipeline(agg, roster);
   drawCameras(agg, roster);
@@ -180,6 +187,38 @@ void ControlPanel::draw() {
   drawStack(agg);
 
   ImGui::End();
+}
+
+void ControlPanel::drawConfig() {
+  ImGui::SeparatorText("Config");
+  if (!load_config_) {
+    ImGui::TextDisabled("%s", config_path_.c_str());
+    return;
+  }
+  const char* name = config_path_.c_str();
+  if (const char* slash = std::strrchr(name, '/')) name = slash + 1;
+  ImGui::Text("%s", name);
+  ImGui::SetItemTooltip("%s", config_path_.c_str());
+
+  // Loading another config closes these connections and opens the new
+  // config's. A server whose sensor changes releases its cameras (they must be
+  // configured again); one whose sensor stays keeps them running.
+  const float load_w = ImGui::CalcTextSize("Load").x +
+                       ImGui::GetStyle().FramePadding.x * 2.0f;
+  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - load_w -
+                          ImGui::GetStyle().ItemSpacing.x);
+  const bool enter = ImGui::InputText("##config_path", config_input_,
+                                      sizeof(config_input_),
+                                      ImGuiInputTextFlags_EnterReturnsTrue);
+  ImGui::SetItemTooltip("Path of a YAML config. Or drop one on the window.");
+  ImGui::SameLine();
+  if ((ImGui::Button("Load") || enter) && config_input_[0] != '\0')
+    load_config_(config_input_);
+  if (!config_error_.empty()) {
+    ImGui::PushStyleColor(ImGuiCol_Text, kRed);
+    ImGui::TextWrapped("%s", config_error_.c_str());
+    ImGui::PopStyleColor();
+  }
 }
 
 void ControlPanel::drawServers(const Agg& agg) {
@@ -195,6 +234,9 @@ void ControlPanel::drawServers(const Agg& agg) {
       const std::string st = c->serverState();
       ImGui::SameLine();
       ImGui::TextDisabled("[%s]", st.empty() ? "..." : st.c_str());
+    } else if (c->commanderSlotTaken()) {
+      ImGui::SameLine();
+      ImGui::TextColored(kAmber, "[refused: another commander]");
     }
   }
   if (agg.disagree)
